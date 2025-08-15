@@ -1116,6 +1116,12 @@ func (nv NodeView) TailNode(
 		capMap[tailcfg.CapabilityFileSharing] = []tailcfg.RawMessage{}
 	}
 
+	if cfg.CertificatesFeatureConfig.Enabled {
+		capMap[tailcfg.CapabilityHTTPS] = []tailcfg.RawMessage{}
+		capMap["funnel"] = []tailcfg.RawMessage{}
+		capMap["https://tailscale.com/cap/funnel-ports?ports=443,8443,10000"] = []tailcfg.RawMessage{}
+	}
+
 	tNode := tailcfg.Node{
 		//nolint:gosec // G115: NodeID values are within int64 range
 		ID:       tailcfg.NodeID(nv.ID()),

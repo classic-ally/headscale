@@ -114,6 +114,52 @@ func generateUserProfiles(
 	return profiles
 }
 
+// GetCertDomainsForNode returns all domains this node can request certificates for.
+// This includes the MagicDNS domain and any extra_records that point to this node's IP.
+func GetCertDomainsForNode(cfg *types.Config, node *types.Node) []string {
+	var domains []string
+
+	fqdn, err := node.GetFQDN(cfg.BaseDomain)
+	if err != nil {
+		log.Warn().Msgf("failed to get FQDN of node %s for certDomains: %s", node.ID, err)
+	} else {
+		certDomain, _ := strings.CutSuffix(fqdn, ".")
+		domains = append(domains, certDomain)
+	}
+
+	if cfg.TailcfgDNSConfig == nil {
+		return domains
+	}
+
+	var nodeIPv4, nodeIPv6 string
+	if node.IPv4 != nil {
+		nodeIPv4 = node.IPv4.String()
+	}
+	if node.IPv6 != nil {
+		nodeIPv6 = node.IPv6.String()
+	}
+
+	for _, record := range cfg.TailcfgDNSConfig.ExtraRecords {
+		if record.Type != "A" && record.Type != "AAAA" {
+			continue
+		}
+
+		if (record.Type == "A" && record.Value == nodeIPv4) ||
+			(record.Type == "AAAA" && record.Value == nodeIPv6) {
+			domain := strings.TrimSuffix(record.Name, ".")
+			domains = append(domains, domain)
+
+			log.Debug().
+				Str("node", node.Hostname).
+				Str("domain", domain).
+				Str("ip", record.Value).
+				Msg("Added cert domain from extra_records")
+		}
+	}
+
+	return domains
+}
+
 func generateDNSConfig(
 	cfg *types.Config,
 	node types.NodeView,
@@ -126,7 +172,48 @@ func generateDNSConfig(
 
 	addNextDNSMetadata(dnsConfig.Resolvers, node)
 
+	dnsConfig.CertDomains = append(dnsConfig.CertDomains, getCertDomainsForNodeView(cfg, node)...)
+
 	return dnsConfig
+}
+
+// getCertDomainsForNodeView is the NodeView variant of GetCertDomainsForNode.
+func getCertDomainsForNodeView(cfg *types.Config, node types.NodeView) []string {
+	var domains []string
+
+	fqdn, err := node.GetFQDN(cfg.BaseDomain)
+	if err != nil {
+		log.Warn().Msgf("failed to get FQDN of node %s for certDomains: %s", node.ID(), err)
+	} else {
+		certDomain, _ := strings.CutSuffix(fqdn, ".")
+		domains = append(domains, certDomain)
+	}
+
+	if cfg.TailcfgDNSConfig == nil {
+		return domains
+	}
+
+	var nodeIPv4, nodeIPv6 string
+	if node.IPv4().Valid() {
+		nodeIPv4 = node.IPv4().Get().String()
+	}
+	if node.IPv6().Valid() {
+		nodeIPv6 = node.IPv6().Get().String()
+	}
+
+	for _, record := range cfg.TailcfgDNSConfig.ExtraRecords {
+		if record.Type != "A" && record.Type != "AAAA" {
+			continue
+		}
+
+		if (record.Type == "A" && record.Value == nodeIPv4) ||
+			(record.Type == "AAAA" && record.Value == nodeIPv6) {
+			domain := strings.TrimSuffix(record.Name, ".")
+			domains = append(domains, domain)
+		}
+	}
+
+	return domains
 }
 
 // If any nextdns DoH resolvers are present in the list of resolvers it will
