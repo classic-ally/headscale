@@ -151,6 +151,12 @@ func (fm *FunnelManager) UpdateRoutes() error {
 		return fmt.Errorf("failed to rename temp file: %w", err)
 	}
 
+	// Explicitly set permissions to ensure nginx can read it
+	// This is necessary because the file may inherit restrictive permissions from the directory
+	if err := os.Chmod(fm.routesFile, 0644); err != nil {
+		log.Warn().Err(err).Msg("Failed to set permissions on funnel routes file")
+	}
+
 	fm.lastHash = currentHash
 
 	log.Info().
