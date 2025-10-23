@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/juanfont/headscale/hscontrol/state"
@@ -106,6 +107,9 @@ func (fm *FunnelManager) UpdateRoutes() error {
 				Msg("Failed to get FQDN for funnel-enabled node")
 			continue
 		}
+
+		// Strip trailing dot if present (DNS root notation)
+		fqdn = strings.TrimSuffix(fqdn, ".")
 
 		// Get node's primary IP address
 		var nodeIP string
