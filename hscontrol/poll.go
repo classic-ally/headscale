@@ -134,6 +134,14 @@ func (m *mapSession) serve() {
 	// the response and just wants a 200.
 	// !req.stream && req.OmitPeers
 	if m.isEndpointUpdate() {
+		// Update funnel routes if Hostinfo changed
+		if err := m.h.funnelManager.UpdateRoutes(); err != nil {
+			log.Error().
+				Err(err).
+				Str("node", m.node.Hostname).
+				Msg("failed to update funnel routes")
+		}
+
 		m.w.WriteHeader(http.StatusOK)
 		mapResponseEndpointUpdates.WithLabelValues("ok").Inc()
 	}

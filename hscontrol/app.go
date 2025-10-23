@@ -103,6 +103,7 @@ type Headscale struct {
 	extraRecordMan *dns.ExtraRecordsMan
 	authProvider   AuthProvider
 	mapBatcher     *mapper.Batcher
+	funnelManager  *FunnelManager
 
 	clientStreamsOpen sync.WaitGroup
 }
@@ -244,6 +245,9 @@ func NewHeadscale(cfg *types.Config) (*Headscale, error) {
 
 		app.DERPServer = embeddedDERPServer
 	}
+
+	// Initialize funnel manager for SNI route management
+	app.funnelManager = NewFunnelManager(s, cfg)
 
 	return &app, nil
 }

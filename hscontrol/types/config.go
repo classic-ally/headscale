@@ -91,6 +91,9 @@ type Config struct {
 
 	CertificatesFeatureConfig CertificatesFeatureConfig
 
+	// FunnelRoutesFile is the path to the nginx SNI routes file for funnel
+	FunnelRoutesFile string
+
 	UnixSocket           string
 	UnixSocketPermission fs.FileMode
 
