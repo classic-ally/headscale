@@ -30,11 +30,48 @@ func NewFunnelManager(state *state.State, cfg *types.Config) *FunnelManager {
 		routesFile = cfg.FunnelRoutesFile
 	}
 
-	return &FunnelManager{
+	fm := &FunnelManager{
 		state:      state,
 		cfg:        cfg,
 		routesFile: routesFile,
 	}
+
+	// Initialize empty routes file if it doesn't exist
+	// This prevents nginx from failing to start when it tries to include the file
+	if err := fm.initializeRoutesFile(); err != nil {
+		log.Warn().
+			Err(err).
+			Str("file", routesFile).
+			Msg("Failed to initialize funnel routes file")
+	}
+
+	return fm
+}
+
+// initializeRoutesFile creates an empty routes file if it doesn't exist.
+func (fm *FunnelManager) initializeRoutesFile() error {
+	// Check if file exists
+	if _, err := os.Stat(fm.routesFile); err == nil {
+		return nil // File already exists
+	}
+
+	// Ensure directory exists
+	dir := filepath.Dir(fm.routesFile)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", dir, err)
+	}
+
+	// Create empty file with proper permissions
+	content := []byte("# Auto-generated funnel routes - DO NOT EDIT MANUALLY\n# Managed by headscale\n")
+	if err := os.WriteFile(fm.routesFile, content, 0644); err != nil {
+		return fmt.Errorf("failed to create routes file: %w", err)
+	}
+
+	log.Info().
+		Str("file", fm.routesFile).
+		Msg("Initialized empty funnel routes file")
+
+	return nil
 }
 
 // UpdateRoutes regenerates the funnel routes configuration file based on current node state.
@@ -136,7 +173,8 @@ func (fm *FunnelManager) UpdateRoutes() error {
 // reloadNginx sends a reload signal to nginx via sudo systemctl.
 // Requires sudo rule: headscale ALL=(ALL) NOPASSWD: /path/to/systemctl reload nginx
 func (fm *FunnelManager) reloadNginx() error {
-	cmd := exec.Command("sudo", "systemctl", "reload", "nginx")
+	// Use absolute paths for NixOS
+	cmd := exec.Command("/run/wrappers/bin/sudo", "/run/current-system/sw/bin/systemctl", "reload", "nginx")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("nginx reload failed: %w, output: %s", err, output)
