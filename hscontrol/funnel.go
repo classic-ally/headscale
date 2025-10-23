@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 
@@ -157,29 +156,7 @@ func (fm *FunnelManager) UpdateRoutes() error {
 	log.Info().
 		Int("routes", routeCount).
 		Str("file", fm.routesFile).
-		Msg("Updated funnel routes configuration")
+		Msg("Updated funnel routes configuration (nginx will auto-reload)")
 
-	// Reload nginx
-	if err := fm.reloadNginx(); err != nil {
-		log.Error().
-			Err(err).
-			Msg("Failed to reload nginx after updating funnel routes")
-		return fmt.Errorf("failed to reload nginx: %w", err)
-	}
-
-	return nil
-}
-
-// reloadNginx sends a reload signal to nginx via sudo systemctl.
-// Requires sudo rule: headscale ALL=(ALL) NOPASSWD: /path/to/systemctl reload nginx
-func (fm *FunnelManager) reloadNginx() error {
-	// Use absolute paths for NixOS
-	cmd := exec.Command("/run/wrappers/bin/sudo", "/run/current-system/sw/bin/systemctl", "reload", "nginx")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("nginx reload failed: %w, output: %s", err, output)
-	}
-
-	log.Info().Msg("Nginx reloaded successfully")
 	return nil
 }
