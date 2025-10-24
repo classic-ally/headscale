@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
+	"github.com/juanfont/headscale/hscontrol/mapper"
 	"github.com/juanfont/headscale/hscontrol/state"
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/rs/zerolog/log"
@@ -98,19 +98,6 @@ func (fm *FunnelManager) UpdateRoutes() error {
 			continue
 		}
 
-		// Get node's FQDN
-		fqdn, err := node.GetFQDN(fm.cfg.BaseDomain)
-		if err != nil {
-			log.Warn().
-				Err(err).
-				Str("node", node.Hostname).
-				Msg("Failed to get FQDN for funnel-enabled node")
-			continue
-		}
-
-		// Strip trailing dot if present (DNS root notation)
-		fqdn = strings.TrimSuffix(fqdn, ".")
-
 		// Get node's primary IP address
 		var nodeIP string
 		if node.IPv4 != nil {
@@ -124,9 +111,14 @@ func (fm *FunnelManager) UpdateRoutes() error {
 			continue
 		}
 
-		// Write route entry
-		buf.WriteString(fmt.Sprintf("%s  %s:443;  # %s\n", fqdn, nodeIP, node.Hostname))
-		routeCount++
+		// Get all cert domains for this node (MagicDNS + extra_records)
+		certDomains := mapper.GetCertDomainsForNode(fm.cfg, node)
+
+		// Generate SNI route for each domain
+		for _, domain := range certDomains {
+			buf.WriteString(fmt.Sprintf("%s  %s:443;  # %s\n", domain, nodeIP, node.Hostname))
+			routeCount++
+		}
 	}
 
 	content := buf.Bytes()
