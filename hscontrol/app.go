@@ -166,24 +166,7 @@ func NewHeadscale(cfg *types.Config) (*Headscale, error) {
 
 	authProvider = NewAuthProviderWeb(cfg.ServerURL)
 	if cfg.OIDC.Issuer != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		oidcProvider, err := NewAuthProviderOIDC(
-			ctx,
-			&app,
-			cfg.ServerURL,
-			&cfg.OIDC,
-		)
-		if err != nil {
-			if cfg.OIDC.OnlyStartIfOIDCIsAvailable {
-				return nil, err
-			} else {
-				log.Warn().Err(err).Msg("failed to set up OIDC provider, falling back to CLI based authentication")
-			}
-		} else {
-			authProvider = oidcProvider
-		}
+		authProvider = NewAuthProviderOIDC(&app, cfg.ServerURL, &cfg.OIDC)
 	}
 
 	app.authProvider = authProvider

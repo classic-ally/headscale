@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -59,31 +60,16 @@ type AuthProviderOIDC struct {
 	// the auth and the callback steps.
 	authCache *zcache.Cache[string, AuthInfo]
 
+	mu           sync.Mutex
 	oidcProvider *oidc.Provider
 	oauth2Config *oauth2.Config
 }
 
 func NewAuthProviderOIDC(
-	ctx context.Context,
 	h *Headscale,
 	serverURL string,
 	cfg *types.OIDCConfig,
-) (*AuthProviderOIDC, error) {
-	var err error
-	// grab oidc config if it hasn't been already
-	oidcProvider, err := oidc.NewProvider(context.Background(), cfg.Issuer) //nolint:contextcheck
-	if err != nil {
-		return nil, fmt.Errorf("creating OIDC provider from issuer config: %w", err)
-	}
-
-	oauth2Config := &oauth2.Config{
-		ClientID:     cfg.ClientID,
-		ClientSecret: cfg.ClientSecret,
-		Endpoint:     oidcProvider.Endpoint(),
-		RedirectURL:  strings.TrimSuffix(serverURL, "/") + "/oidc/callback",
-		Scopes:       cfg.Scope,
-	}
-
+) *AuthProviderOIDC {
 	authCache := zcache.New[string, AuthInfo](
 		authCacheExpiration,
 		authCacheCleanup,
@@ -94,10 +80,37 @@ func NewAuthProviderOIDC(
 		serverURL: serverURL,
 		cfg:       cfg,
 		authCache: authCache,
+	}
+}
 
-		oidcProvider: oidcProvider,
-		oauth2Config: oauth2Config,
-	}, nil
+// ensureInitialized lazily connects to the OIDC provider on first use.
+// This allows headscale to start even if the OIDC provider is temporarily
+// unreachable (e.g. behind the tailnet that headscale itself manages).
+func (a *AuthProviderOIDC) ensureInitialized(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.oidcProvider != nil {
+		return nil
+	}
+
+	oidcProvider, err := oidc.NewProvider(ctx, a.cfg.Issuer)
+	if err != nil {
+		return fmt.Errorf("OIDC provider not available: %w", err)
+	}
+
+	a.oauth2Config = &oauth2.Config{
+		ClientID:     a.cfg.ClientID,
+		ClientSecret: a.cfg.ClientSecret,
+		Endpoint:     oidcProvider.Endpoint(),
+		RedirectURL:  strings.TrimSuffix(a.serverURL, "/") + "/oidc/callback",
+		Scopes:       a.cfg.Scope,
+	}
+	a.oidcProvider = oidcProvider
+
+	log.Info().Msg("OIDC provider initialized successfully")
+
+	return nil
 }
 
 func (a *AuthProviderOIDC) AuthURL(authID types.AuthID) string {
@@ -138,6 +151,11 @@ func (a *AuthProviderOIDC) authHandler(
 	req *http.Request,
 	registration bool,
 ) {
+	if err := a.ensureInitialized(req.Context()); err != nil {
+		httpError(writer, NewHTTPError(http.StatusServiceUnavailable, "OIDC provider not available, try again later", err))
+		return
+	}
+
 	authID, err := authIDFromRequest(req)
 	if err != nil {
 		httpError(writer, err)
@@ -205,6 +223,11 @@ func (a *AuthProviderOIDC) OIDCCallbackHandler(
 	writer http.ResponseWriter,
 	req *http.Request,
 ) {
+	if err := a.ensureInitialized(req.Context()); err != nil {
+		httpError(writer, NewHTTPError(http.StatusServiceUnavailable, "OIDC provider not available", err))
+		return
+	}
+
 	code, state, err := extractCodeAndStateParamFromRequest(req)
 	if err != nil {
 		httpError(writer, err)
