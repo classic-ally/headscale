@@ -119,7 +119,6 @@ func (h *Headscale) NoiseUpgradeHandler(
 
 	r := chi.NewRouter()
 
-<<<<<<< HEAD
 	// Limit request body size to prevent unauthenticated OOM attacks.
 	// The Noise handshake accepts any machine key without checking
 	// registration, so all endpoints behind this router are reachable

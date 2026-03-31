@@ -172,13 +172,13 @@ func generateDNSConfig(
 
 	addNextDNSMetadata(dnsConfig.Resolvers, node)
 
-	dnsConfig.CertDomains = append(dnsConfig.CertDomains, getCertDomainsForNodeView(cfg, node)...)
+	dnsConfig.CertDomains = append(dnsConfig.CertDomains, GetCertDomainsForNodeView(cfg, node)...)
 
 	return dnsConfig
 }
 
-// getCertDomainsForNodeView is the NodeView variant of GetCertDomainsForNode.
-func getCertDomainsForNodeView(cfg *types.Config, node types.NodeView) []string {
+// GetCertDomainsForNodeView is the NodeView variant of GetCertDomainsForNode.
+func GetCertDomainsForNodeView(cfg *types.Config, node types.NodeView) []string {
 	var domains []string
 
 	fqdn, err := node.GetFQDN(cfg.BaseDomain)

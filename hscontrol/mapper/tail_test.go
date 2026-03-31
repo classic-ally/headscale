@@ -54,6 +54,7 @@ func TestTailNode(t *testing.T) {
 		pol        []byte
 		dnsConfig  *tailcfg.DNSConfig
 		baseDomain string
+		certsEnabled bool
 		want       *tailcfg.Node
 		wantErr    bool
 	}{
@@ -198,6 +199,34 @@ func TestTailNode(t *testing.T) {
 		// TODO: Add tests to check other aspects of the node conversion:
 		// - With tags and policy
 		// - dnsconfig and basedomain
+		{
+			name: "certificates-enabled-adds-funnel-caps",
+			node: &types.Node{
+				GivenName: "funnel-node",
+				Hostinfo:  &tailcfg.Hostinfo{},
+			},
+			dnsConfig:    &tailcfg.DNSConfig{},
+			baseDomain:   "",
+			certsEnabled: true,
+			want: &tailcfg.Node{
+				Name:              "funnel-node",
+				StableID:          "0",
+				HomeDERP:          0,
+				LegacyDERPString:  "127.3.3.40:0",
+				Hostinfo:          hiview(tailcfg.Hostinfo{}),
+				MachineAuthorized: true,
+
+				CapMap: tailcfg.NodeCapMap{
+					tailcfg.CapabilityFileSharing:                                          []tailcfg.RawMessage{},
+					tailcfg.CapabilityAdmin:                                                []tailcfg.RawMessage{},
+					tailcfg.CapabilitySSH:                                                  []tailcfg.RawMessage{},
+					tailcfg.CapabilityHTTPS:                                                []tailcfg.RawMessage{},
+					"funnel":                                                               []tailcfg.RawMessage{},
+					"https://tailscale.com/cap/funnel-ports?ports=443,8443,10000": []tailcfg.RawMessage{},
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -208,6 +237,9 @@ func TestTailNode(t *testing.T) {
 				TailcfgDNSConfig:    tt.dnsConfig,
 				RandomizeClientPort: false,
 				Taildrop:            types.TaildropConfig{Enabled: true},
+				CertificatesFeatureConfig: types.CertificatesFeatureConfig{
+					Enabled: tt.certsEnabled,
+				},
 			}
 			_ = primary.SetRoutes(tt.node.ID, tt.node.SubnetRoutes()...)
 

@@ -12,6 +12,7 @@ import (
 	"github.com/juanfont/headscale/hscontrol/state"
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/rs/zerolog/log"
+	"tailscale.com/types/views"
 )
 
 // FunnelManager manages automatic SNI router configuration for nodes with funnel enabled.
@@ -74,31 +75,18 @@ func (fm *FunnelManager) initializeRoutesFile() error {
 	return nil
 }
 
-// UpdateRoutes regenerates the funnel routes configuration file based on current node state.
-// This is idempotent - it will only write and reload nginx if the configuration has changed.
-func (fm *FunnelManager) UpdateRoutes() error {
-	fm.mu.Lock()
-	defer fm.mu.Unlock()
-
-	// Get all nodes from state
-	nodes, err := fm.state.ListNodes()
-	if err != nil {
-		return fmt.Errorf("failed to list nodes: %w", err)
-	}
-
-	// Build routes configuration
+// GenerateFunnelRoutes builds the nginx SNI route configuration for funnel-enabled nodes.
+// This is a pure function for testability.
+func GenerateFunnelRoutes(cfg *types.Config, nodes types.Nodes) []byte {
 	var buf bytes.Buffer
 	buf.WriteString("# Auto-generated funnel routes - DO NOT EDIT MANUALLY\n")
 	buf.WriteString("# Managed by headscale\n\n")
 
-	routeCount := 0
 	for _, node := range nodes {
-		// Check if node has funnel enabled
 		if node.Hostinfo == nil || !node.Hostinfo.IngressEnabled {
 			continue
 		}
 
-		// Get node's primary IP address
 		var nodeIP string
 		if node.IPv4 != nil {
 			nodeIP = node.IPv4.String()
@@ -111,17 +99,59 @@ func (fm *FunnelManager) UpdateRoutes() error {
 			continue
 		}
 
-		// Get all cert domains for this node (MagicDNS + extra_records)
-		certDomains := mapper.GetCertDomainsForNode(fm.cfg, node)
+		certDomains := mapper.GetCertDomainsForNode(cfg, node)
 
-		// Generate SNI route for each domain
 		for _, domain := range certDomains {
 			buf.WriteString(fmt.Sprintf("%s  %s:443;  # %s\n", domain, nodeIP, node.Hostname))
-			routeCount++
 		}
 	}
 
-	content := buf.Bytes()
+	return buf.Bytes()
+}
+
+// generateFunnelRoutesFromViews builds routes from NodeView slice (used at runtime).
+func generateFunnelRoutesFromViews(cfg *types.Config, nodes views.Slice[types.NodeView]) []byte {
+	var buf bytes.Buffer
+	buf.WriteString("# Auto-generated funnel routes - DO NOT EDIT MANUALLY\n")
+	buf.WriteString("# Managed by headscale\n\n")
+
+	for i := range nodes.Len() {
+		node := nodes.At(i)
+		if !node.Hostinfo().Valid() || !node.Hostinfo().IngressEnabled() {
+			continue
+		}
+
+		var nodeIP string
+		if node.IPv4().Valid() {
+			nodeIP = node.IPv4().Get().String()
+		} else if node.IPv6().Valid() {
+			nodeIP = fmt.Sprintf("[%s]", node.IPv6().Get().String())
+		} else {
+			log.Warn().
+				Str("node", node.Hostname()).
+				Msg("Funnel-enabled node has no IP address")
+			continue
+		}
+
+		certDomains := mapper.GetCertDomainsForNodeView(cfg, node)
+
+		for _, domain := range certDomains {
+			buf.WriteString(fmt.Sprintf("%s  %s:443;  # %s\n", domain, nodeIP, node.Hostname()))
+		}
+	}
+
+	return buf.Bytes()
+}
+
+// UpdateRoutes regenerates the funnel routes configuration file based on current node state.
+// This is idempotent - it will only write and reload nginx if the configuration has changed.
+func (fm *FunnelManager) UpdateRoutes() error {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+
+	nodes := fm.state.ListNodes()
+
+	content := generateFunnelRoutesFromViews(fm.cfg, nodes)
 
 	// Check if content has changed
 	currentHash := sha256.Sum256(content)
@@ -156,7 +186,7 @@ func (fm *FunnelManager) UpdateRoutes() error {
 	fm.lastHash = currentHash
 
 	log.Info().
-		Int("routes", routeCount).
+		Int("routes", nodes.Len()).
 		Str("file", fm.routesFile).
 		Msg("Updated funnel routes configuration (nginx will auto-reload)")
 
