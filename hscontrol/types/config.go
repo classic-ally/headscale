@@ -496,9 +496,8 @@ func validateServerConfig() error {
 		errorText += "Fatal config error: the only supported values for tls_letsencrypt_challenge_type are HTTP-01 and TLS-ALPN-01\n"
 	}
 
-	if (viper.GetBool("certificates.enabled") == true) && viper.GetString("certificates.set_dns_command") == "" {
-		errorText += "Fatal config error: certificates.enabled is set to true, but certificates.set_dns_command is not set\n"
-	}
+	// certificates.set_dns_command is optional when DNS zone credentials
+	// are managed in the database via `headscale domains add --provider`.
 
 	if !strings.HasPrefix(viper.GetString("server_url"), "http://") &&
 		!strings.HasPrefix(viper.GetString("server_url"), "https://") {
