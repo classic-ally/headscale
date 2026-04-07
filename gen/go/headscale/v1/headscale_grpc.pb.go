@@ -19,34 +19,41 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	HeadscaleService_CreateUser_FullMethodName        = "/headscale.v1.HeadscaleService/CreateUser"
-	HeadscaleService_RenameUser_FullMethodName        = "/headscale.v1.HeadscaleService/RenameUser"
-	HeadscaleService_DeleteUser_FullMethodName        = "/headscale.v1.HeadscaleService/DeleteUser"
-	HeadscaleService_ListUsers_FullMethodName         = "/headscale.v1.HeadscaleService/ListUsers"
-	HeadscaleService_CreatePreAuthKey_FullMethodName  = "/headscale.v1.HeadscaleService/CreatePreAuthKey"
-	HeadscaleService_ExpirePreAuthKey_FullMethodName  = "/headscale.v1.HeadscaleService/ExpirePreAuthKey"
-	HeadscaleService_DeletePreAuthKey_FullMethodName  = "/headscale.v1.HeadscaleService/DeletePreAuthKey"
-	HeadscaleService_ListPreAuthKeys_FullMethodName   = "/headscale.v1.HeadscaleService/ListPreAuthKeys"
-	HeadscaleService_DebugCreateNode_FullMethodName   = "/headscale.v1.HeadscaleService/DebugCreateNode"
-	HeadscaleService_GetNode_FullMethodName           = "/headscale.v1.HeadscaleService/GetNode"
-	HeadscaleService_SetTags_FullMethodName           = "/headscale.v1.HeadscaleService/SetTags"
-	HeadscaleService_SetApprovedRoutes_FullMethodName = "/headscale.v1.HeadscaleService/SetApprovedRoutes"
-	HeadscaleService_RegisterNode_FullMethodName      = "/headscale.v1.HeadscaleService/RegisterNode"
-	HeadscaleService_DeleteNode_FullMethodName        = "/headscale.v1.HeadscaleService/DeleteNode"
-	HeadscaleService_ExpireNode_FullMethodName        = "/headscale.v1.HeadscaleService/ExpireNode"
-	HeadscaleService_RenameNode_FullMethodName        = "/headscale.v1.HeadscaleService/RenameNode"
-	HeadscaleService_ListNodes_FullMethodName         = "/headscale.v1.HeadscaleService/ListNodes"
-	HeadscaleService_BackfillNodeIPs_FullMethodName   = "/headscale.v1.HeadscaleService/BackfillNodeIPs"
-	HeadscaleService_AuthRegister_FullMethodName      = "/headscale.v1.HeadscaleService/AuthRegister"
-	HeadscaleService_AuthApprove_FullMethodName       = "/headscale.v1.HeadscaleService/AuthApprove"
-	HeadscaleService_AuthReject_FullMethodName        = "/headscale.v1.HeadscaleService/AuthReject"
-	HeadscaleService_CreateApiKey_FullMethodName      = "/headscale.v1.HeadscaleService/CreateApiKey"
-	HeadscaleService_ExpireApiKey_FullMethodName      = "/headscale.v1.HeadscaleService/ExpireApiKey"
-	HeadscaleService_ListApiKeys_FullMethodName       = "/headscale.v1.HeadscaleService/ListApiKeys"
-	HeadscaleService_DeleteApiKey_FullMethodName      = "/headscale.v1.HeadscaleService/DeleteApiKey"
-	HeadscaleService_GetPolicy_FullMethodName         = "/headscale.v1.HeadscaleService/GetPolicy"
-	HeadscaleService_SetPolicy_FullMethodName         = "/headscale.v1.HeadscaleService/SetPolicy"
-	HeadscaleService_Health_FullMethodName            = "/headscale.v1.HeadscaleService/Health"
+	HeadscaleService_CreateUser_FullMethodName         = "/headscale.v1.HeadscaleService/CreateUser"
+	HeadscaleService_RenameUser_FullMethodName         = "/headscale.v1.HeadscaleService/RenameUser"
+	HeadscaleService_DeleteUser_FullMethodName         = "/headscale.v1.HeadscaleService/DeleteUser"
+	HeadscaleService_ListUsers_FullMethodName          = "/headscale.v1.HeadscaleService/ListUsers"
+	HeadscaleService_CreatePreAuthKey_FullMethodName   = "/headscale.v1.HeadscaleService/CreatePreAuthKey"
+	HeadscaleService_ExpirePreAuthKey_FullMethodName   = "/headscale.v1.HeadscaleService/ExpirePreAuthKey"
+	HeadscaleService_DeletePreAuthKey_FullMethodName   = "/headscale.v1.HeadscaleService/DeletePreAuthKey"
+	HeadscaleService_ListPreAuthKeys_FullMethodName    = "/headscale.v1.HeadscaleService/ListPreAuthKeys"
+	HeadscaleService_DebugCreateNode_FullMethodName    = "/headscale.v1.HeadscaleService/DebugCreateNode"
+	HeadscaleService_GetNode_FullMethodName            = "/headscale.v1.HeadscaleService/GetNode"
+	HeadscaleService_SetTags_FullMethodName            = "/headscale.v1.HeadscaleService/SetTags"
+	HeadscaleService_SetApprovedRoutes_FullMethodName  = "/headscale.v1.HeadscaleService/SetApprovedRoutes"
+	HeadscaleService_RegisterNode_FullMethodName       = "/headscale.v1.HeadscaleService/RegisterNode"
+	HeadscaleService_DeleteNode_FullMethodName         = "/headscale.v1.HeadscaleService/DeleteNode"
+	HeadscaleService_ExpireNode_FullMethodName         = "/headscale.v1.HeadscaleService/ExpireNode"
+	HeadscaleService_RenameNode_FullMethodName         = "/headscale.v1.HeadscaleService/RenameNode"
+	HeadscaleService_ListNodes_FullMethodName          = "/headscale.v1.HeadscaleService/ListNodes"
+	HeadscaleService_BackfillNodeIPs_FullMethodName    = "/headscale.v1.HeadscaleService/BackfillNodeIPs"
+	HeadscaleService_AuthRegister_FullMethodName       = "/headscale.v1.HeadscaleService/AuthRegister"
+	HeadscaleService_AuthApprove_FullMethodName        = "/headscale.v1.HeadscaleService/AuthApprove"
+	HeadscaleService_AuthReject_FullMethodName         = "/headscale.v1.HeadscaleService/AuthReject"
+	HeadscaleService_CreateApiKey_FullMethodName       = "/headscale.v1.HeadscaleService/CreateApiKey"
+	HeadscaleService_ExpireApiKey_FullMethodName       = "/headscale.v1.HeadscaleService/ExpireApiKey"
+	HeadscaleService_ListApiKeys_FullMethodName        = "/headscale.v1.HeadscaleService/ListApiKeys"
+	HeadscaleService_DeleteApiKey_FullMethodName       = "/headscale.v1.HeadscaleService/DeleteApiKey"
+	HeadscaleService_GetPolicy_FullMethodName          = "/headscale.v1.HeadscaleService/GetPolicy"
+	HeadscaleService_SetPolicy_FullMethodName          = "/headscale.v1.HeadscaleService/SetPolicy"
+	HeadscaleService_RegisterDomain_FullMethodName     = "/headscale.v1.HeadscaleService/RegisterDomain"
+	HeadscaleService_VerifyDomain_FullMethodName       = "/headscale.v1.HeadscaleService/VerifyDomain"
+	HeadscaleService_ListDomains_FullMethodName        = "/headscale.v1.HeadscaleService/ListDomains"
+	HeadscaleService_DeleteDomain_FullMethodName       = "/headscale.v1.HeadscaleService/DeleteDomain"
+	HeadscaleService_ReassignDomain_FullMethodName     = "/headscale.v1.HeadscaleService/ReassignDomain"
+	HeadscaleService_SetDomainAccess_FullMethodName    = "/headscale.v1.HeadscaleService/SetDomainAccess"
+	HeadscaleService_DeleteDomainAccess_FullMethodName = "/headscale.v1.HeadscaleService/DeleteDomainAccess"
+	HeadscaleService_Health_FullMethodName             = "/headscale.v1.HeadscaleService/Health"
 )
 
 // HeadscaleServiceClient is the client API for HeadscaleService service.
@@ -86,6 +93,14 @@ type HeadscaleServiceClient interface {
 	// --- Policy start ---
 	GetPolicy(ctx context.Context, in *GetPolicyRequest, opts ...grpc.CallOption) (*GetPolicyResponse, error)
 	SetPolicy(ctx context.Context, in *SetPolicyRequest, opts ...grpc.CallOption) (*SetPolicyResponse, error)
+	// --- Domain start ---
+	RegisterDomain(ctx context.Context, in *RegisterDomainRequest, opts ...grpc.CallOption) (*RegisterDomainResponse, error)
+	VerifyDomain(ctx context.Context, in *VerifyDomainRequest, opts ...grpc.CallOption) (*VerifyDomainResponse, error)
+	ListDomains(ctx context.Context, in *ListDomainsRequest, opts ...grpc.CallOption) (*ListDomainsResponse, error)
+	DeleteDomain(ctx context.Context, in *DeleteDomainRequest, opts ...grpc.CallOption) (*DeleteDomainResponse, error)
+	ReassignDomain(ctx context.Context, in *ReassignDomainRequest, opts ...grpc.CallOption) (*ReassignDomainResponse, error)
+	SetDomainAccess(ctx context.Context, in *SetDomainAccessRequest, opts ...grpc.CallOption) (*SetDomainAccessResponse, error)
+	DeleteDomainAccess(ctx context.Context, in *DeleteDomainAccessRequest, opts ...grpc.CallOption) (*DeleteDomainAccessResponse, error)
 	// --- Health start ---
 	Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
 }
@@ -368,6 +383,76 @@ func (c *headscaleServiceClient) SetPolicy(ctx context.Context, in *SetPolicyReq
 	return out, nil
 }
 
+func (c *headscaleServiceClient) RegisterDomain(ctx context.Context, in *RegisterDomainRequest, opts ...grpc.CallOption) (*RegisterDomainResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RegisterDomainResponse)
+	err := c.cc.Invoke(ctx, HeadscaleService_RegisterDomain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *headscaleServiceClient) VerifyDomain(ctx context.Context, in *VerifyDomainRequest, opts ...grpc.CallOption) (*VerifyDomainResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VerifyDomainResponse)
+	err := c.cc.Invoke(ctx, HeadscaleService_VerifyDomain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *headscaleServiceClient) ListDomains(ctx context.Context, in *ListDomainsRequest, opts ...grpc.CallOption) (*ListDomainsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListDomainsResponse)
+	err := c.cc.Invoke(ctx, HeadscaleService_ListDomains_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *headscaleServiceClient) DeleteDomain(ctx context.Context, in *DeleteDomainRequest, opts ...grpc.CallOption) (*DeleteDomainResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteDomainResponse)
+	err := c.cc.Invoke(ctx, HeadscaleService_DeleteDomain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *headscaleServiceClient) ReassignDomain(ctx context.Context, in *ReassignDomainRequest, opts ...grpc.CallOption) (*ReassignDomainResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReassignDomainResponse)
+	err := c.cc.Invoke(ctx, HeadscaleService_ReassignDomain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *headscaleServiceClient) SetDomainAccess(ctx context.Context, in *SetDomainAccessRequest, opts ...grpc.CallOption) (*SetDomainAccessResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetDomainAccessResponse)
+	err := c.cc.Invoke(ctx, HeadscaleService_SetDomainAccess_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *headscaleServiceClient) DeleteDomainAccess(ctx context.Context, in *DeleteDomainAccessRequest, opts ...grpc.CallOption) (*DeleteDomainAccessResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteDomainAccessResponse)
+	err := c.cc.Invoke(ctx, HeadscaleService_DeleteDomainAccess_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *headscaleServiceClient) Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HealthResponse)
@@ -415,6 +500,14 @@ type HeadscaleServiceServer interface {
 	// --- Policy start ---
 	GetPolicy(context.Context, *GetPolicyRequest) (*GetPolicyResponse, error)
 	SetPolicy(context.Context, *SetPolicyRequest) (*SetPolicyResponse, error)
+	// --- Domain start ---
+	RegisterDomain(context.Context, *RegisterDomainRequest) (*RegisterDomainResponse, error)
+	VerifyDomain(context.Context, *VerifyDomainRequest) (*VerifyDomainResponse, error)
+	ListDomains(context.Context, *ListDomainsRequest) (*ListDomainsResponse, error)
+	DeleteDomain(context.Context, *DeleteDomainRequest) (*DeleteDomainResponse, error)
+	ReassignDomain(context.Context, *ReassignDomainRequest) (*ReassignDomainResponse, error)
+	SetDomainAccess(context.Context, *SetDomainAccessRequest) (*SetDomainAccessResponse, error)
+	DeleteDomainAccess(context.Context, *DeleteDomainAccessRequest) (*DeleteDomainAccessResponse, error)
 	// --- Health start ---
 	Health(context.Context, *HealthRequest) (*HealthResponse, error)
 	mustEmbedUnimplementedHeadscaleServiceServer()
@@ -507,6 +600,27 @@ func (UnimplementedHeadscaleServiceServer) GetPolicy(context.Context, *GetPolicy
 }
 func (UnimplementedHeadscaleServiceServer) SetPolicy(context.Context, *SetPolicyRequest) (*SetPolicyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetPolicy not implemented")
+}
+func (UnimplementedHeadscaleServiceServer) RegisterDomain(context.Context, *RegisterDomainRequest) (*RegisterDomainResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterDomain not implemented")
+}
+func (UnimplementedHeadscaleServiceServer) VerifyDomain(context.Context, *VerifyDomainRequest) (*VerifyDomainResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method VerifyDomain not implemented")
+}
+func (UnimplementedHeadscaleServiceServer) ListDomains(context.Context, *ListDomainsRequest) (*ListDomainsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListDomains not implemented")
+}
+func (UnimplementedHeadscaleServiceServer) DeleteDomain(context.Context, *DeleteDomainRequest) (*DeleteDomainResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteDomain not implemented")
+}
+func (UnimplementedHeadscaleServiceServer) ReassignDomain(context.Context, *ReassignDomainRequest) (*ReassignDomainResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReassignDomain not implemented")
+}
+func (UnimplementedHeadscaleServiceServer) SetDomainAccess(context.Context, *SetDomainAccessRequest) (*SetDomainAccessResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetDomainAccess not implemented")
+}
+func (UnimplementedHeadscaleServiceServer) DeleteDomainAccess(context.Context, *DeleteDomainAccessRequest) (*DeleteDomainAccessResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteDomainAccess not implemented")
 }
 func (UnimplementedHeadscaleServiceServer) Health(context.Context, *HealthRequest) (*HealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Health not implemented")
@@ -1018,6 +1132,132 @@ func _HeadscaleService_SetPolicy_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HeadscaleService_RegisterDomain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterDomainRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HeadscaleServiceServer).RegisterDomain(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HeadscaleService_RegisterDomain_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HeadscaleServiceServer).RegisterDomain(ctx, req.(*RegisterDomainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HeadscaleService_VerifyDomain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VerifyDomainRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HeadscaleServiceServer).VerifyDomain(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HeadscaleService_VerifyDomain_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HeadscaleServiceServer).VerifyDomain(ctx, req.(*VerifyDomainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HeadscaleService_ListDomains_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListDomainsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HeadscaleServiceServer).ListDomains(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HeadscaleService_ListDomains_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HeadscaleServiceServer).ListDomains(ctx, req.(*ListDomainsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HeadscaleService_DeleteDomain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteDomainRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HeadscaleServiceServer).DeleteDomain(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HeadscaleService_DeleteDomain_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HeadscaleServiceServer).DeleteDomain(ctx, req.(*DeleteDomainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HeadscaleService_ReassignDomain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReassignDomainRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HeadscaleServiceServer).ReassignDomain(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HeadscaleService_ReassignDomain_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HeadscaleServiceServer).ReassignDomain(ctx, req.(*ReassignDomainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HeadscaleService_SetDomainAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetDomainAccessRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HeadscaleServiceServer).SetDomainAccess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HeadscaleService_SetDomainAccess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HeadscaleServiceServer).SetDomainAccess(ctx, req.(*SetDomainAccessRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HeadscaleService_DeleteDomainAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteDomainAccessRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HeadscaleServiceServer).DeleteDomainAccess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HeadscaleService_DeleteDomainAccess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HeadscaleServiceServer).DeleteDomainAccess(ctx, req.(*DeleteDomainAccessRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _HeadscaleService_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(HealthRequest)
 	if err := dec(in); err != nil {
@@ -1150,6 +1390,34 @@ var HeadscaleService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetPolicy",
 			Handler:    _HeadscaleService_SetPolicy_Handler,
+		},
+		{
+			MethodName: "RegisterDomain",
+			Handler:    _HeadscaleService_RegisterDomain_Handler,
+		},
+		{
+			MethodName: "VerifyDomain",
+			Handler:    _HeadscaleService_VerifyDomain_Handler,
+		},
+		{
+			MethodName: "ListDomains",
+			Handler:    _HeadscaleService_ListDomains_Handler,
+		},
+		{
+			MethodName: "DeleteDomain",
+			Handler:    _HeadscaleService_DeleteDomain_Handler,
+		},
+		{
+			MethodName: "ReassignDomain",
+			Handler:    _HeadscaleService_ReassignDomain_Handler,
+		},
+		{
+			MethodName: "SetDomainAccess",
+			Handler:    _HeadscaleService_SetDomainAccess_Handler,
+		},
+		{
+			MethodName: "DeleteDomainAccess",
+			Handler:    _HeadscaleService_DeleteDomainAccess_Handler,
 		},
 		{
 			MethodName: "Health",

@@ -68,6 +68,7 @@ func TestDNSConfigMapResponse(t *testing.T) {
 					TailcfgDNSConfig: &dnsConfigOrig,
 				},
 				nodeInShared1.View(),
+				nil,
 			)
 
 			if diff := cmp.Diff(tt.want, got, cmpopts.EquateEmpty()); diff != "" {
@@ -194,12 +195,58 @@ func TestGetCertDomainsForNode(t *testing.T) {
 				}
 			}
 
-			got := GetCertDomainsForNode(cfg, tt.node)
+			got := GetCertDomainsForNode(cfg, tt.node, nil)
 
 			if diff := cmp.Diff(tt.want, got, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("GetCertDomainsForNode() unexpected result (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestGetCertDomainsForNodeWithDomainLookup(t *testing.T) {
+	node := &types.Node{
+		ID:        1,
+		GivenName: "desktop",
+		UserID:    uintp(1),
+		User:      &types.User{Name: "alice"},
+		IPv4:      iap("100.64.0.6"),
+	}
+
+	cfg := &types.Config{
+		BaseDomain: "icefox.xyz",
+		TailcfgDNSConfig: &tailcfg.DNSConfig{
+			ExtraRecords: []tailcfg.DNSRecord{
+				{Name: "bw.bentley.sh.", Type: "A", Value: "100.64.0.6"},
+			},
+		},
+	}
+
+	// Mock lookup returning DB-sourced domains
+	mockLookup := func(nodeID types.NodeID) []string {
+		if nodeID == 1 {
+			return []string{"app.newdomain.dev", "wolfson.bar"}
+		}
+		return nil
+	}
+
+	got := GetCertDomainsForNode(cfg, node, mockLookup)
+
+	want := []string{
+		"desktop.icefox.xyz",  // MagicDNS
+		"bw.bentley.sh",      // extra_records
+		"app.newdomain.dev",  // DB domain
+		"wolfson.bar",        // DB domain
+	}
+	if diff := cmp.Diff(want, got, cmpopts.EquateEmpty()); diff != "" {
+		t.Errorf("GetCertDomainsForNode() with lookup (-want +got):\n%s", diff)
+	}
+
+	// Verify nil lookup still works (backwards compat)
+	gotNil := GetCertDomainsForNode(cfg, node, nil)
+	wantNil := []string{"desktop.icefox.xyz", "bw.bentley.sh"}
+	if diff := cmp.Diff(wantNil, gotNil, cmpopts.EquateEmpty()); diff != "" {
+		t.Errorf("GetCertDomainsForNode() nil lookup (-want +got):\n%s", diff)
 	}
 }
 
@@ -226,6 +273,7 @@ func TestGenerateDNSConfigIncludesCertDomains(t *testing.T) {
 			TailcfgDNSConfig: &dnsConfigOrig,
 		},
 		node.View(),
+		nil,
 	)
 
 	wantCertDomains := []string{"desktop.icefox.xyz", "bw.bentley.sh"}

@@ -1,0 +1,70 @@
+syntax = "proto3";
+package headscale.v1;
+option go_package = "github.com/juanfont/headscale/gen/go/v1";
+
+import "google/protobuf/timestamp.proto";
+
+message Domain {
+  uint64 id = 1;
+  string domain = 2;
+  uint64 node_id = 3;
+  string provider = 4;
+  bool verified = 5;
+  string verify_token = 6;
+  string zone_status = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+message DomainAccess {
+  uint64 id = 1;
+  uint64 domain_id = 2;
+  uint64 user_id = 3;
+  string role = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message RegisterDomainRequest {
+  string domain = 1;
+  uint64 node_id = 2;
+  string provider = 3;
+  string api_token = 4;
+}
+
+message RegisterDomainResponse { Domain domain = 1; }
+
+message VerifyDomainRequest { string domain = 1; }
+
+message VerifyDomainResponse { Domain domain = 1; }
+
+message ListDomainsRequest {
+  uint64 node_id = 1;
+  uint64 user_id = 2;
+}
+
+message ListDomainsResponse { repeated Domain domains = 1; }
+
+message DeleteDomainRequest { string domain = 1; }
+
+message DeleteDomainResponse {}
+
+message ReassignDomainRequest {
+  string domain = 1;
+  uint64 node_id = 2;
+}
+
+message ReassignDomainResponse { Domain domain = 1; }
+
+message SetDomainAccessRequest {
+  string domain = 1;
+  uint64 user_id = 2;
+  string role = 3;
+}
+
+message SetDomainAccessResponse {}
+
+message DeleteDomainAccessRequest {
+  string domain = 1;
+  uint64 user_id = 2;
+}
+
+message DeleteDomainAccessResponse {}

@@ -114,9 +114,14 @@ func generateUserProfiles(
 	return profiles
 }
 
+// DomainLookup provides verified domains for a node from the database.
+// When nil, only config-based domains (extra_records) are returned.
+type DomainLookup func(nodeID types.NodeID) []string
+
 // GetCertDomainsForNode returns all domains this node can request certificates for.
-// This includes the MagicDNS domain and any extra_records that point to this node's IP.
-func GetCertDomainsForNode(cfg *types.Config, node *types.Node) []string {
+// This includes the MagicDNS domain, extra_records that point to this node's IP,
+// and verified domains from the database (when domainLookup is provided).
+func GetCertDomainsForNode(cfg *types.Config, node *types.Node, domainLookup DomainLookup) []string {
 	var domains []string
 
 	fqdn, err := node.GetFQDN(cfg.BaseDomain)
@@ -157,12 +162,17 @@ func GetCertDomainsForNode(cfg *types.Config, node *types.Node) []string {
 		}
 	}
 
+	if domainLookup != nil {
+		domains = append(domains, domainLookup(node.ID)...)
+	}
+
 	return domains
 }
 
 func generateDNSConfig(
 	cfg *types.Config,
 	node types.NodeView,
+	domainLookup DomainLookup,
 ) *tailcfg.DNSConfig {
 	if cfg.TailcfgDNSConfig == nil {
 		return nil
@@ -172,13 +182,13 @@ func generateDNSConfig(
 
 	addNextDNSMetadata(dnsConfig.Resolvers, node)
 
-	dnsConfig.CertDomains = append(dnsConfig.CertDomains, GetCertDomainsForNodeView(cfg, node)...)
+	dnsConfig.CertDomains = append(dnsConfig.CertDomains, GetCertDomainsForNodeView(cfg, node, domainLookup)...)
 
 	return dnsConfig
 }
 
 // GetCertDomainsForNodeView is the NodeView variant of GetCertDomainsForNode.
-func GetCertDomainsForNodeView(cfg *types.Config, node types.NodeView) []string {
+func GetCertDomainsForNodeView(cfg *types.Config, node types.NodeView, domainLookup DomainLookup) []string {
 	var domains []string
 
 	fqdn, err := node.GetFQDN(cfg.BaseDomain)
@@ -211,6 +221,10 @@ func GetCertDomainsForNodeView(cfg *types.Config, node types.NodeView) []string 
 			domain := strings.TrimSuffix(record.Name, ".")
 			domains = append(domains, domain)
 		}
+	}
+
+	if domainLookup != nil {
+		domains = append(domains, domainLookup(node.ID())...)
 	}
 
 	return domains

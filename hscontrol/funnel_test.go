@@ -183,7 +183,7 @@ func TestGenerateFunnelRoutes(t *testing.T) {
 				}
 			}
 
-			got := string(GenerateFunnelRoutes(cfg, tt.nodes))
+			got := string(GenerateFunnelRoutes(cfg, tt.nodes, nil))
 
 			// Strip the header to check for "empty body"
 			body := got

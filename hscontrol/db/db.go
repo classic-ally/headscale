@@ -727,6 +727,49 @@ WHERE tags IS NOT NULL AND tags != '[]' AND tags != '';
 				},
 				Rollback: func(db *gorm.DB) error { return nil },
 			},
+			{
+				ID: "202603311400-add-domains-tables",
+				Migrate: func(tx *gorm.DB) error {
+					if err := tx.Exec(`
+CREATE TABLE domains(
+  id integer PRIMARY KEY AUTOINCREMENT,
+  domain text NOT NULL,
+  node_id integer,
+  provider text,
+  api_token text,
+  verified numeric DEFAULT false,
+  verify_token text,
+  created_at datetime,
+  CONSTRAINT fk_domains_node FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
+)`).Error; err != nil {
+						return fmt.Errorf("creating domains table: %w", err)
+					}
+
+					if err := tx.Exec(`CREATE UNIQUE INDEX idx_domains_domain ON domains(domain)`).Error; err != nil {
+						return fmt.Errorf("creating domains unique index: %w", err)
+					}
+
+					if err := tx.Exec(`
+CREATE TABLE domain_access(
+  id integer PRIMARY KEY AUTOINCREMENT,
+  domain_id integer NOT NULL,
+  user_id integer NOT NULL,
+  role text NOT NULL DEFAULT 'user',
+  created_at datetime,
+  CONSTRAINT fk_domain_access_domain FOREIGN KEY(domain_id) REFERENCES domains(id) ON DELETE CASCADE,
+  CONSTRAINT fk_domain_access_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+)`).Error; err != nil {
+						return fmt.Errorf("creating domain_access table: %w", err)
+					}
+
+					if err := tx.Exec(`CREATE UNIQUE INDEX idx_domain_access_unique ON domain_access(domain_id, user_id)`).Error; err != nil {
+						return fmt.Errorf("creating domain_access unique index: %w", err)
+					}
+
+					return nil
+				},
+				Rollback: func(db *gorm.DB) error { return nil },
+			},
 		},
 	)
 
@@ -743,6 +786,36 @@ WHERE tags IS NOT NULL AND tags != '[]' AND tags != '';
 			return err
 		}
 
+		// Create domain tables using raw SQL to match schema.sql exactly.
+		// Must come after nodes table is created (FK dependency).
+		err = tx.Exec(`CREATE TABLE domains(
+  id integer PRIMARY KEY AUTOINCREMENT,
+  domain text NOT NULL,
+  node_id integer,
+  provider text,
+  api_token text,
+  verified numeric DEFAULT false,
+  verify_token text,
+  created_at datetime,
+  CONSTRAINT fk_domains_node FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
+)`).Error
+		if err != nil {
+			return err
+		}
+
+		err = tx.Exec(`CREATE TABLE domain_access(
+  id integer PRIMARY KEY AUTOINCREMENT,
+  domain_id integer NOT NULL,
+  user_id integer NOT NULL,
+  role text NOT NULL DEFAULT 'user',
+  created_at datetime,
+  CONSTRAINT fk_domain_access_domain FOREIGN KEY(domain_id) REFERENCES domains(id) ON DELETE CASCADE,
+  CONSTRAINT fk_domain_access_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+)`).Error
+		if err != nil {
+			return err
+		}
+
 		// Drop all indexes (both GORM-created and potentially pre-existing ones)
 		// to ensure we can recreate them in the correct format
 		dropIndexes := []string{
@@ -753,6 +826,8 @@ WHERE tags IS NOT NULL AND tags != '[]' AND tags != '';
 			`DROP INDEX IF EXISTS "idx_name_provider_identifier"`,
 			`DROP INDEX IF EXISTS "idx_name_no_provider_identifier"`,
 			`DROP INDEX IF EXISTS "idx_pre_auth_keys_prefix"`,
+			`DROP INDEX IF EXISTS "idx_domains_domain"`,
+			`DROP INDEX IF EXISTS "idx_domain_access_unique"`,
 		}
 
 		for _, dropSQL := range dropIndexes {
@@ -771,6 +846,8 @@ WHERE tags IS NOT NULL AND tags != '[]' AND tags != '';
 			`CREATE UNIQUE INDEX idx_name_provider_identifier ON users(name, provider_identifier)`,
 			`CREATE UNIQUE INDEX idx_name_no_provider_identifier ON users(name) WHERE provider_identifier IS NULL`,
 			`CREATE UNIQUE INDEX idx_pre_auth_keys_prefix ON pre_auth_keys(prefix) WHERE prefix IS NOT NULL AND prefix != ''`,
+			`CREATE UNIQUE INDEX idx_domains_domain ON domains(domain)`,
+			`CREATE UNIQUE INDEX idx_domain_access_unique ON domain_access(domain_id, user_id)`,
 		}
 
 		for _, indexSQL := range indexes {

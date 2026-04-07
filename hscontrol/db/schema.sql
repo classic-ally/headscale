@@ -107,6 +107,30 @@ CREATE TABLE policies(
 );
 CREATE INDEX idx_policies_deleted_at ON policies(deleted_at);
 
+CREATE TABLE domains(
+  id integer PRIMARY KEY AUTOINCREMENT,
+  domain text NOT NULL,
+  node_id integer,
+  provider text,
+  api_token text,
+  verified numeric DEFAULT false,
+  verify_token text,
+  created_at datetime,
+  CONSTRAINT fk_domains_node FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX idx_domains_domain ON domains(domain);
+
+CREATE TABLE domain_access(
+  id integer PRIMARY KEY AUTOINCREMENT,
+  domain_id integer NOT NULL,
+  user_id integer NOT NULL,
+  role text NOT NULL DEFAULT 'user',
+  created_at datetime,
+  CONSTRAINT fk_domain_access_domain FOREIGN KEY(domain_id) REFERENCES domains(id) ON DELETE CASCADE,
+  CONSTRAINT fk_domain_access_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX idx_domain_access_unique ON domain_access(domain_id, user_id);
+
 CREATE TABLE database_versions(
   id integer PRIMARY KEY,
   version text NOT NULL,

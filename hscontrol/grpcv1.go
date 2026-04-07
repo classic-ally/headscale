@@ -911,4 +911,145 @@ func (api headscaleV1APIServer) AuthReject(
 	return &v1.AuthRejectResponse{}, nil
 }
 
+// --- Domain management ---
+
+func (api headscaleV1APIServer) RegisterDomain(
+	ctx context.Context,
+	request *v1.RegisterDomainRequest,
+) (*v1.RegisterDomainResponse, error) {
+	var nodeID *types.NodeID
+	if request.GetNodeId() != 0 {
+		nid := types.NodeID(request.GetNodeId())
+		nodeID = &nid
+	}
+
+	var provider, apiToken *string
+	if request.GetProvider() != "" {
+		p := request.GetProvider()
+		provider = &p
+	}
+	if request.GetApiToken() != "" {
+		t := request.GetApiToken()
+		apiToken = &t
+	}
+
+	domain, c, err := api.h.state.RegisterDomain(
+		request.GetDomain(), nodeID, provider, apiToken,
+	)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "registering domain: %s", err)
+	}
+
+	api.h.Change(c)
+	if nodeID != nil {
+		_ = api.h.funnelManager.UpdateRoutes()
+	}
+
+	return &v1.RegisterDomainResponse{Domain: domain.Proto()}, nil
+}
+
+func (api headscaleV1APIServer) VerifyDomain(
+	ctx context.Context,
+	request *v1.VerifyDomainRequest,
+) (*v1.VerifyDomainResponse, error) {
+	domain, c, err := api.h.state.VerifyDomain(request.GetDomain())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "verifying domain: %s", err)
+	}
+
+	api.h.Change(c)
+	_ = api.h.funnelManager.UpdateRoutes()
+
+	return &v1.VerifyDomainResponse{Domain: domain.Proto()}, nil
+}
+
+func (api headscaleV1APIServer) ListDomains(
+	ctx context.Context,
+	request *v1.ListDomainsRequest,
+) (*v1.ListDomainsResponse, error) {
+	var nodeID *types.NodeID
+	if request.GetNodeId() != 0 {
+		nid := types.NodeID(request.GetNodeId())
+		nodeID = &nid
+	}
+
+	var userID *uint
+	if request.GetUserId() != 0 {
+		uid := uint(request.GetUserId())
+		userID = &uid
+	}
+
+	domains, err := api.h.state.ListDomains(nodeID, userID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "listing domains: %s", err)
+	}
+
+	response := make([]*v1.Domain, len(domains))
+	for i, d := range domains {
+		response[i] = d.Proto()
+	}
+
+	return &v1.ListDomainsResponse{Domains: response}, nil
+}
+
+func (api headscaleV1APIServer) DeleteDomain(
+	ctx context.Context,
+	request *v1.DeleteDomainRequest,
+) (*v1.DeleteDomainResponse, error) {
+	c, err := api.h.state.DeleteDomain(request.GetDomain())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "deleting domain: %s", err)
+	}
+
+	api.h.Change(c)
+	_ = api.h.funnelManager.UpdateRoutes()
+
+	return &v1.DeleteDomainResponse{}, nil
+}
+
+func (api headscaleV1APIServer) ReassignDomain(
+	ctx context.Context,
+	request *v1.ReassignDomainRequest,
+) (*v1.ReassignDomainResponse, error) {
+	domain, c, err := api.h.state.ReassignDomain(
+		request.GetDomain(), types.NodeID(request.GetNodeId()),
+	)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "reassigning domain: %s", err)
+	}
+
+	api.h.Change(c)
+	_ = api.h.funnelManager.UpdateRoutes()
+
+	return &v1.ReassignDomainResponse{Domain: domain.Proto()}, nil
+}
+
+func (api headscaleV1APIServer) SetDomainAccess(
+	ctx context.Context,
+	request *v1.SetDomainAccessRequest,
+) (*v1.SetDomainAccessResponse, error) {
+	err := api.h.state.SetDomainAccess(
+		request.GetDomain(), uint(request.GetUserId()), request.GetRole(),
+	)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "setting domain access: %s", err)
+	}
+
+	return &v1.SetDomainAccessResponse{}, nil
+}
+
+func (api headscaleV1APIServer) DeleteDomainAccess(
+	ctx context.Context,
+	request *v1.DeleteDomainAccessRequest,
+) (*v1.DeleteDomainAccessResponse, error) {
+	err := api.h.state.DeleteDomainAccess(
+		request.GetDomain(), uint(request.GetUserId()),
+	)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "deleting domain access: %s", err)
+	}
+
+	return &v1.DeleteDomainAccessResponse{}, nil
+}
+
 func (api headscaleV1APIServer) mustEmbedUnimplementedHeadscaleServiceServer() {}

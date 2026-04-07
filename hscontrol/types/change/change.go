@@ -450,3 +450,24 @@ func ExtraRecords() Change {
 
 	return c
 }
+
+// DomainCertChange creates a DNS config update targeted at a specific node
+// whose CertDomains have changed due to domain registration, verification,
+// deletion, or reassignment.
+func DomainCertChange(nodeID types.NodeID) Change {
+	return Change{
+		Reason:      "domain cert change",
+		TargetNode:  nodeID,
+		IncludeDNS:  true,
+		IncludeSelf: true,
+	}
+}
+
+// DomainCertBroadcast creates a DNS config update sent to all nodes.
+// Used when a domain change may affect multiple nodes (e.g., reassignment).
+func DomainCertBroadcast() Change {
+	return Change{
+		Reason:     "domain cert broadcast",
+		IncludeDNS: true,
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/juanfont/headscale/hscontrol/dns/providers"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/metrics"
@@ -615,18 +616,41 @@ func (ns *noiseServer) SetDNSHandler(
 		http.Error(writer, "certificates feature is not enabled in headscale", http.StatusForbidden)
 		return
 	}
-	cmd := exec.Command(ns.headscale.cfg.CertificatesFeatureConfig.SetDNSCommand, setDnsRequest.Name, setDnsRequest.Type, setDnsRequest.Value)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
 
-	if err != nil {
-		log.Error().AnErr("error", err).
-			Strs("args", cmd.Args).
+	// Try DNS provider from database first, fall back to set_dns_command
+	var dnsErr error
+	zone, zoneErr := ns.headscale.state.FindParentZone(setDnsRequest.Name)
+	if zoneErr == nil && zone != nil && zone.APIToken != nil {
+		provider, provErr := providers.New(*zone.Provider, *zone.APIToken)
+		if provErr != nil {
+			log.Error().Err(provErr).
+				Str("provider", *zone.Provider).
+				Str("domain", setDnsRequest.Name).
+				Msg("failed to create DNS provider")
+			http.Error(writer, "DNS provider error", http.StatusInternalServerError)
+			return
+		}
+		dnsErr = provider.SetRecord(req.Context(), setDnsRequest.Name, setDnsRequest.Type, setDnsRequest.Value)
+	} else if ns.headscale.cfg.CertificatesFeatureConfig.SetDNSCommand != "" {
+		// Fall back to set_dns_command for backwards compatibility
+		cmd := exec.Command(ns.headscale.cfg.CertificatesFeatureConfig.SetDNSCommand, setDnsRequest.Name, setDnsRequest.Type, setDnsRequest.Value)
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+		dnsErr = cmd.Run()
+	} else {
+		log.Error().
+			Str("domain", setDnsRequest.Name).
+			Msg("no DNS provider or set_dns_command configured for this domain")
+		http.Error(writer, "no DNS provider configured for this domain's zone", http.StatusInternalServerError)
+		return
+	}
+
+	if dnsErr != nil {
+		log.Error().Err(dnsErr).
 			Str("NodeKey", setDnsRequest.NodeKey.ShortString()).
 			Str("DnsName", setDnsRequest.Name).
-			Msg("Error running set_dns_command")
-		http.Error(writer, "Failed to execute SetDNSCommand", http.StatusInternalServerError)
+			Msg("failed to set DNS record")
+		http.Error(writer, "Failed to set DNS record", http.StatusInternalServerError)
 		return
 	}
 

@@ -268,6 +268,236 @@
         ]
       }
     },
+    "/api/v1/domain": {
+      "get": {
+        "operationId": "HeadscaleService_ListDomains",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1ListDomainsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "nodeId",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "userId",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "format": "uint64"
+          }
+        ],
+        "tags": [
+          "HeadscaleService"
+        ]
+      },
+      "post": {
+        "summary": "--- Domain start ---",
+        "operationId": "HeadscaleService_RegisterDomain",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1RegisterDomainResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1RegisterDomainRequest"
+            }
+          }
+        ],
+        "tags": [
+          "HeadscaleService"
+        ]
+      }
+    },
+    "/api/v1/domain/access": {
+      "delete": {
+        "operationId": "HeadscaleService_DeleteDomainAccess",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1DeleteDomainAccessResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "userId",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "format": "uint64"
+          }
+        ],
+        "tags": [
+          "HeadscaleService"
+        ]
+      },
+      "post": {
+        "operationId": "HeadscaleService_SetDomainAccess",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1SetDomainAccessResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1SetDomainAccessRequest"
+            }
+          }
+        ],
+        "tags": [
+          "HeadscaleService"
+        ]
+      }
+    },
+    "/api/v1/domain/reassign": {
+      "post": {
+        "operationId": "HeadscaleService_ReassignDomain",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1ReassignDomainResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1ReassignDomainRequest"
+            }
+          }
+        ],
+        "tags": [
+          "HeadscaleService"
+        ]
+      }
+    },
+    "/api/v1/domain/verify": {
+      "post": {
+        "operationId": "HeadscaleService_VerifyDomain",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1VerifyDomainResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1VerifyDomainRequest"
+            }
+          }
+        ],
+        "tags": [
+          "HeadscaleService"
+        ]
+      }
+    },
+    "/api/v1/domain/{domain}": {
+      "delete": {
+        "operationId": "HeadscaleService_DeleteDomain",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1DeleteDomainResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "HeadscaleService"
+        ]
+      }
+    },
     "/api/v1/health": {
       "get": {
         "summary": "--- Health start ---",
@@ -1150,6 +1380,12 @@
     "v1DeleteApiKeyResponse": {
       "type": "object"
     },
+    "v1DeleteDomainAccessResponse": {
+      "type": "object"
+    },
+    "v1DeleteDomainResponse": {
+      "type": "object"
+    },
     "v1DeleteNodeResponse": {
       "type": "object"
     },
@@ -1158,6 +1394,38 @@
     },
     "v1DeleteUserResponse": {
       "type": "object"
+    },
+    "v1Domain": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "nodeId": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "verifyToken": {
+          "type": "string"
+        },
+        "zoneStatus": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
     },
     "v1ExpireApiKeyRequest": {
       "type": "object",
@@ -1230,6 +1498,18 @@
           "items": {
             "type": "object",
             "$ref": "#/definitions/v1ApiKey"
+          }
+        }
+      }
+    },
+    "v1ListDomainsResponse": {
+      "type": "object",
+      "properties": {
+        "domains": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Domain"
           }
         }
       }
@@ -1387,6 +1667,52 @@
         }
       }
     },
+    "v1ReassignDomainRequest": {
+      "type": "object",
+      "properties": {
+        "domain": {
+          "type": "string"
+        },
+        "nodeId": {
+          "type": "string",
+          "format": "uint64"
+        }
+      }
+    },
+    "v1ReassignDomainResponse": {
+      "type": "object",
+      "properties": {
+        "domain": {
+          "$ref": "#/definitions/v1Domain"
+        }
+      }
+    },
+    "v1RegisterDomainRequest": {
+      "type": "object",
+      "properties": {
+        "domain": {
+          "type": "string"
+        },
+        "nodeId": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "apiToken": {
+          "type": "string"
+        }
+      }
+    },
+    "v1RegisterDomainResponse": {
+      "type": "object",
+      "properties": {
+        "domain": {
+          "$ref": "#/definitions/v1Domain"
+        }
+      }
+    },
     "v1RegisterMethod": {
       "type": "string",
       "enum": [
@@ -1428,6 +1754,24 @@
           "$ref": "#/definitions/v1Node"
         }
       }
+    },
+    "v1SetDomainAccessRequest": {
+      "type": "object",
+      "properties": {
+        "domain": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "role": {
+          "type": "string"
+        }
+      }
+    },
+    "v1SetDomainAccessResponse": {
+      "type": "object"
     },
     "v1SetPolicyRequest": {
       "type": "object",
@@ -1485,6 +1829,22 @@
         },
         "profilePicUrl": {
           "type": "string"
+        }
+      }
+    },
+    "v1VerifyDomainRequest": {
+      "type": "object",
+      "properties": {
+        "domain": {
+          "type": "string"
+        }
+      }
+    },
+    "v1VerifyDomainResponse": {
+      "type": "object",
+      "properties": {
+        "domain": {
+          "$ref": "#/definitions/v1Domain"
         }
       }
     }

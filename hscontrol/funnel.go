@@ -76,8 +76,8 @@ func (fm *FunnelManager) initializeRoutesFile() error {
 }
 
 // GenerateFunnelRoutes builds the nginx SNI route configuration for funnel-enabled nodes.
-// This is a pure function for testability.
-func GenerateFunnelRoutes(cfg *types.Config, nodes types.Nodes) []byte {
+// This is a pure function for testability. Pass nil for domainLookup to use config-only domains.
+func GenerateFunnelRoutes(cfg *types.Config, nodes types.Nodes, domainLookup mapper.DomainLookup) []byte {
 	var buf bytes.Buffer
 	buf.WriteString("# Auto-generated funnel routes - DO NOT EDIT MANUALLY\n")
 	buf.WriteString("# Managed by headscale\n\n")
@@ -99,7 +99,7 @@ func GenerateFunnelRoutes(cfg *types.Config, nodes types.Nodes) []byte {
 			continue
 		}
 
-		certDomains := mapper.GetCertDomainsForNode(cfg, node)
+		certDomains := mapper.GetCertDomainsForNode(cfg, node, domainLookup)
 
 		for _, domain := range certDomains {
 			buf.WriteString(fmt.Sprintf("%s  %s:443;  # %s\n", domain, nodeIP, node.Hostname))
@@ -110,7 +110,7 @@ func GenerateFunnelRoutes(cfg *types.Config, nodes types.Nodes) []byte {
 }
 
 // generateFunnelRoutesFromViews builds routes from NodeView slice (used at runtime).
-func generateFunnelRoutesFromViews(cfg *types.Config, nodes views.Slice[types.NodeView]) []byte {
+func generateFunnelRoutesFromViews(cfg *types.Config, nodes views.Slice[types.NodeView], domainLookup mapper.DomainLookup) []byte {
 	var buf bytes.Buffer
 	buf.WriteString("# Auto-generated funnel routes - DO NOT EDIT MANUALLY\n")
 	buf.WriteString("# Managed by headscale\n\n")
@@ -133,7 +133,7 @@ func generateFunnelRoutesFromViews(cfg *types.Config, nodes views.Slice[types.No
 			continue
 		}
 
-		certDomains := mapper.GetCertDomainsForNodeView(cfg, node)
+		certDomains := mapper.GetCertDomainsForNodeView(cfg, node, domainLookup)
 
 		for _, domain := range certDomains {
 			buf.WriteString(fmt.Sprintf("%s  %s:443;  # %s\n", domain, nodeIP, node.Hostname()))
@@ -151,7 +151,7 @@ func (fm *FunnelManager) UpdateRoutes() error {
 
 	nodes := fm.state.ListNodes()
 
-	content := generateFunnelRoutesFromViews(fm.cfg, nodes)
+	content := generateFunnelRoutesFromViews(fm.cfg, nodes, fm.state.VerifiedDomainsForNode)
 
 	// Check if content has changed
 	currentHash := sha256.Sum256(content)

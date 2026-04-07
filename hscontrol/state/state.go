@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"slices"
 	"strings"
@@ -2492,4 +2493,195 @@ func (s *State) maybeUpdateNodeRoutes(
 		Msg("updating node routes for distribution")
 
 	return s.SetNodeRoutes(id, node.AllApprovedRoutes()...)
+}
+
+// RegisterDomain creates a domain entry. If credentials are provided, stores
+// them as a zone. Determines verification path based on credentials and
+// parent zone existence.
+func (s *State) RegisterDomain(
+	domain string,
+	nodeID *types.NodeID,
+	provider, apiToken *string,
+) (*types.Domain, change.Change, error) {
+	d := types.Domain{
+		Domain:   domain,
+		Provider: provider,
+		APIToken: apiToken,
+	}
+	if nodeID != nil {
+		d.NodeID = nodeID
+	}
+
+	created, err := s.db.CreateDomain(d)
+	if err != nil {
+		return nil, change.Change{}, fmt.Errorf("registering domain: %w", err)
+	}
+
+	// Determine verification path
+	if provider != nil && *provider != "" {
+		// Credentials provided — auto-verify
+		created, err = s.db.SetDomainVerified(domain)
+		if err != nil {
+			return created, change.Change{}, fmt.Errorf("auto-verifying domain: %w", err)
+		}
+	} else if nodeID != nil {
+		// Check for parent zone
+		zone, err := s.db.FindParentZone(domain)
+		if err != nil {
+			return created, change.Change{}, fmt.Errorf("checking parent zone: %w", err)
+		}
+		if zone != nil {
+			// Parent zone exists — auto-verify
+			created, err = s.db.SetDomainVerified(domain)
+			if err != nil {
+				return created, change.Change{}, fmt.Errorf("auto-verifying under zone: %w", err)
+			}
+		}
+	}
+
+	// Auto-grant owner access if bound to a node with a user
+	if nodeID != nil {
+		node, err := s.db.GetNodeByID(*nodeID)
+		if err == nil && node.UserID != nil {
+			_ = s.db.CreateDomainAccess(created.ID, *node.UserID, "owner")
+		}
+	}
+
+	var c change.Change
+	if nodeID != nil && created.Verified {
+		c = change.DomainCertChange(*nodeID)
+	}
+
+	return created, c, nil
+}
+
+// VerifyDomain performs server-side DNS TXT verification for a domain.
+func (s *State) VerifyDomain(domain string) (*types.Domain, change.Change, error) {
+	d, err := s.db.GetDomainByName(domain)
+	if err != nil {
+		return nil, change.Change{}, err
+	}
+
+	if d.Verified {
+		return d, change.Change{}, nil
+	}
+
+	if d.VerifyToken == nil {
+		return nil, change.Change{}, fmt.Errorf("domain has no verify token")
+	}
+
+	records, err := net.LookupTXT("_hs-verify." + domain)
+	if err != nil {
+		return nil, change.Change{}, fmt.Errorf("DNS lookup failed for _hs-verify.%s: %w", domain, err)
+	}
+
+	found := false
+	for _, record := range records {
+		if record == *d.VerifyToken {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, change.Change{}, fmt.Errorf("TXT record _hs-verify.%s does not contain expected token", domain)
+	}
+
+	verified, err := s.db.SetDomainVerified(domain)
+	if err != nil {
+		return nil, change.Change{}, err
+	}
+
+	var c change.Change
+	if verified.NodeID != nil {
+		c = change.DomainCertChange(*verified.NodeID)
+	}
+
+	return verified, c, nil
+}
+
+// ListDomains returns domains, optionally filtered by node and/or user.
+func (s *State) ListDomains(nodeID *types.NodeID, userID *uint) ([]types.Domain, error) {
+	return s.db.ListDomains(nodeID, userID)
+}
+
+// DeleteDomain removes a domain entry.
+func (s *State) DeleteDomain(domain string) (change.Change, error) {
+	d, err := s.db.GetDomainByName(domain)
+	if err != nil {
+		return change.Change{}, err
+	}
+
+	nodeID := d.NodeID
+
+	if err := s.db.DeleteDomain(domain); err != nil {
+		return change.Change{}, err
+	}
+
+	var c change.Change
+	if nodeID != nil {
+		c = change.DomainCertChange(*nodeID)
+	}
+
+	return c, nil
+}
+
+// ReassignDomain atomically moves a domain to a different node.
+func (s *State) ReassignDomain(domain string, newNodeID types.NodeID) (*types.Domain, change.Change, error) {
+	old, err := s.db.GetDomainByName(domain)
+	if err != nil {
+		return nil, change.Change{}, err
+	}
+
+	updated, err := s.db.ReassignDomain(domain, newNodeID)
+	if err != nil {
+		return nil, change.Change{}, err
+	}
+
+	// Notify both old and new nodes
+	c := change.DomainCertBroadcast()
+	if old.NodeID != nil {
+		c = change.DomainCertChange(*old.NodeID).Merge(change.DomainCertChange(newNodeID))
+	}
+
+	return updated, c, nil
+}
+
+// SetDomainAccess grants or updates access for a user on a domain.
+func (s *State) SetDomainAccess(domain string, userID uint, role string) error {
+	d, err := s.db.GetDomainByName(domain)
+	if err != nil {
+		return err
+	}
+	// Delete existing access first (upsert)
+	_ = s.db.DeleteDomainAccess(d.ID, userID)
+	return s.db.CreateDomainAccess(d.ID, userID, role)
+}
+
+// DeleteDomainAccess revokes a user's access to a domain.
+func (s *State) DeleteDomainAccess(domain string, userID uint) error {
+	d, err := s.db.GetDomainByName(domain)
+	if err != nil {
+		return err
+	}
+	return s.db.DeleteDomainAccess(d.ID, userID)
+}
+
+// VerifiedDomainsForNode returns domain names from the domains table
+// that are verified and bound to the given node. Used by GetCertDomainsForNode.
+func (s *State) VerifiedDomainsForNode(nodeID types.NodeID) []string {
+	domains, err := s.db.ListVerifiedDomainsForNode(nodeID)
+	if err != nil {
+		log.Warn().Err(err).Uint64("node_id", uint64(nodeID)).Msg("failed to list verified domains for node")
+		return nil
+	}
+	names := make([]string, len(domains))
+	for i, d := range domains {
+		names[i] = d.Domain
+	}
+	return names
+}
+
+// FindParentZone finds the nearest parent zone with DNS credentials.
+func (s *State) FindParentZone(domain string) (*types.Domain, error) {
+	return s.db.FindParentZone(domain)
 }

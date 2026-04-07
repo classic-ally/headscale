@@ -10,6 +10,7 @@ import "headscale/v1/node.proto";
 import "headscale/v1/apikey.proto";
 import "headscale/v1/auth.proto";
 import "headscale/v1/policy.proto";
+import "headscale/v1/domain.proto";
 
 service HeadscaleService {
   // --- User start ---
@@ -205,6 +206,58 @@ service HeadscaleService {
     };
   }
   // --- Policy end ---
+
+  // --- Domain start ---
+  rpc RegisterDomain(RegisterDomainRequest)
+      returns (RegisterDomainResponse) {
+    option (google.api.http) = {
+      post : "/api/v1/domain"
+      body : "*"
+    };
+  }
+
+  rpc VerifyDomain(VerifyDomainRequest) returns (VerifyDomainResponse) {
+    option (google.api.http) = {
+      post : "/api/v1/domain/verify"
+      body : "*"
+    };
+  }
+
+  rpc ListDomains(ListDomainsRequest) returns (ListDomainsResponse) {
+    option (google.api.http) = {
+      get : "/api/v1/domain"
+    };
+  }
+
+  rpc DeleteDomain(DeleteDomainRequest) returns (DeleteDomainResponse) {
+    option (google.api.http) = {
+      delete : "/api/v1/domain/{domain}"
+    };
+  }
+
+  rpc ReassignDomain(ReassignDomainRequest)
+      returns (ReassignDomainResponse) {
+    option (google.api.http) = {
+      post : "/api/v1/domain/reassign"
+      body : "*"
+    };
+  }
+
+  rpc SetDomainAccess(SetDomainAccessRequest)
+      returns (SetDomainAccessResponse) {
+    option (google.api.http) = {
+      post : "/api/v1/domain/access"
+      body : "*"
+    };
+  }
+
+  rpc DeleteDomainAccess(DeleteDomainAccessRequest)
+      returns (DeleteDomainAccessResponse) {
+    option (google.api.http) = {
+      delete : "/api/v1/domain/access"
+    };
+  }
+  // --- Domain end ---
 
   // --- Health start ---
   rpc Health(HealthRequest) returns (HealthResponse) {
