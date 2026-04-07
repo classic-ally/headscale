@@ -84,6 +84,33 @@ func TestCreateDomainZoneUpsert(t *testing.T) {
 	assert.Equal(t, "new-token", *updated.APIToken)
 }
 
+func TestCreateDomainBindNodeToExistingZone(t *testing.T) {
+	db, err := newSQLiteTestDB()
+	require.NoError(t, err)
+
+	user := db.CreateUserForTest("test")
+	node := db.CreateNodeForTest(user, "desktop")
+
+	// Create zone first
+	zone, err := db.CreateDomain(types.Domain{
+		Domain:   "wolfson.bar",
+		Provider: strp("cloudflare"),
+		APIToken: strp("token"),
+	})
+	require.NoError(t, err)
+	assert.Nil(t, zone.NodeID)
+
+	// Bind node to existing zone
+	updated, err := db.CreateDomain(types.Domain{
+		Domain: "wolfson.bar",
+		NodeID: &node.ID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, zone.ID, updated.ID)
+	assert.Equal(t, node.ID, *updated.NodeID)
+	assert.True(t, updated.IsZone()) // Still has credentials
+}
+
 func TestGetDomainByName(t *testing.T) {
 	db, err := newSQLiteTestDB()
 	require.NoError(t, err)

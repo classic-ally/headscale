@@ -57,12 +57,20 @@ func CreateDomain(tx *gorm.DB, domain types.Domain) (*types.Domain, error) {
 	err := tx.Where("domain = ?", domain.Domain).First(&existing).Error
 
 	if err == nil {
-		// Domain exists — upsert if this is a zone credential update
+		// Domain exists — allow upsert for credential updates or node binding
+		updated := false
 		if domain.Provider != nil && *domain.Provider != "" {
 			existing.Provider = domain.Provider
 			existing.APIToken = domain.APIToken
+			updated = true
+		}
+		if domain.NodeID != nil && existing.NodeID == nil {
+			existing.NodeID = domain.NodeID
+			updated = true
+		}
+		if updated {
 			if err := tx.Save(&existing).Error; err != nil {
-				return nil, fmt.Errorf("updating zone credentials: %w", err)
+				return nil, fmt.Errorf("updating domain: %w", err)
 			}
 			return &existing, nil
 		}
