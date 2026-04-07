@@ -8,6 +8,14 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// DomainRecord represents a domain-to-IP mapping, used to inject verified
+// domains into DNS ExtraRecords for tailnet resolution.
+type DomainRecord struct {
+	Domain string
+	IPv4   string
+	IPv6   string
+}
+
 // Domain represents a DNS domain registered in headscale.
 // Zone entries have Provider + APIToken set and NodeID nil.
 // Domain entries have NodeID set and inherit zone credentials from their parent.

@@ -118,6 +118,10 @@ func generateUserProfiles(
 // When nil, only config-based domains (extra_records) are returned.
 type DomainLookup func(nodeID types.NodeID) []string
 
+// AllDomainsLookup returns all verified domain-to-node-IP mappings from the database.
+// Used to inject DB domains into DNS ExtraRecords for tailnet resolution.
+type AllDomainsLookup func() []types.DomainRecord
+
 // GetCertDomainsForNode returns all domains this node can request certificates for.
 // This includes the MagicDNS domain, extra_records that point to this node's IP,
 // and verified domains from the database (when domainLookup is provided).
@@ -173,6 +177,7 @@ func generateDNSConfig(
 	cfg *types.Config,
 	node types.NodeView,
 	domainLookup DomainLookup,
+	allDomainsLookup AllDomainsLookup,
 ) *tailcfg.DNSConfig {
 	if cfg.TailcfgDNSConfig == nil {
 		return nil
@@ -183,6 +188,25 @@ func generateDNSConfig(
 	addNextDNSMetadata(dnsConfig.Resolvers, node)
 
 	dnsConfig.CertDomains = append(dnsConfig.CertDomains, GetCertDomainsForNodeView(cfg, node, domainLookup)...)
+
+	// Inject verified domains from DB as ExtraRecords so tailnet
+	// clients resolve them to the correct node IPs via MagicDNS.
+	for _, dr := range allDomainsLookup() {
+		if dr.IPv4 != "" {
+			dnsConfig.ExtraRecords = append(dnsConfig.ExtraRecords, tailcfg.DNSRecord{
+				Name:  dr.Domain + ".",
+				Type:  "A",
+				Value: dr.IPv4,
+			})
+		}
+		if dr.IPv6 != "" {
+			dnsConfig.ExtraRecords = append(dnsConfig.ExtraRecords, tailcfg.DNSRecord{
+				Name:  dr.Domain + ".",
+				Type:  "AAAA",
+				Value: dr.IPv6,
+			})
+		}
+	}
 
 	return dnsConfig
 }

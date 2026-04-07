@@ -69,6 +69,7 @@ func TestDNSConfigMapResponse(t *testing.T) {
 				},
 				nodeInShared1.View(),
 				nil,
+				func() []types.DomainRecord { return nil },
 			)
 
 			if diff := cmp.Diff(tt.want, got, cmpopts.EquateEmpty()); diff != "" {
@@ -274,6 +275,7 @@ func TestGenerateDNSConfigIncludesCertDomains(t *testing.T) {
 		},
 		node.View(),
 		nil,
+		func() []types.DomainRecord { return nil },
 	)
 
 	wantCertDomains := []string{"desktop.icefox.xyz", "bw.bentley.sh"}

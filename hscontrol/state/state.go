@@ -2681,6 +2681,36 @@ func (s *State) VerifiedDomainsForNode(nodeID types.NodeID) []string {
 	return names
 }
 
+// AllVerifiedDomainRecords returns all verified domains with their node IPs,
+// for injection into DNS ExtraRecords so tailnet clients resolve them via MagicDNS.
+func (s *State) AllVerifiedDomainRecords() []types.DomainRecord {
+	domains, err := s.db.ListDomains(nil, nil)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to list domains for DNS records")
+		return nil
+	}
+
+	var records []types.DomainRecord
+	for _, d := range domains {
+		if !d.Verified || d.NodeID == nil {
+			continue
+		}
+		node, err := s.db.GetNodeByID(*d.NodeID)
+		if err != nil {
+			continue
+		}
+		dr := types.DomainRecord{Domain: d.Domain}
+		if node.IPv4 != nil {
+			dr.IPv4 = node.IPv4.String()
+		}
+		if node.IPv6 != nil {
+			dr.IPv6 = node.IPv6.String()
+		}
+		records = append(records, dr)
+	}
+	return records
+}
+
 // FindParentZone finds the nearest parent zone with DNS credentials.
 func (s *State) FindParentZone(domain string) (*types.Domain, error) {
 	return s.db.FindParentZone(domain)
