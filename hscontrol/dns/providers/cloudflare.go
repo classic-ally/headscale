@@ -185,28 +185,35 @@ func (c *Cloudflare) SetRecord(ctx context.Context, name, recordType, value stri
 	return nil
 }
 
-// waitForPropagation polls the zone's authoritative NS for `name` (TXT)
-// until an entry matching `value` is observed, or the timeout elapses.
-// Resolution goes directly to the auth NS to bypass any caching resolver.
+// propagationResolvers are the public recursive resolvers polled while
+// waiting for a TXT record to propagate. Both must observe the expected
+// value before we consider the record "propagated", which approximates
+// the multi-perspective validation Let's Encrypt has performed since
+// 2024 and avoids the false positive of querying only Cloudflare's own
+// resolver after a write to a Cloudflare-hosted zone.
+//
+// Going through these public resolvers (rather than the system one)
+// also dodges MagicDNS at 100.100.100.100, which does not answer
+// authoritative-record queries for non-tailnet domains.
+var propagationResolvers = []string{
+	"1.1.1.1:53", // Cloudflare
+	"8.8.8.8:53", // Google
+}
+
+// waitForPropagation polls each entry in propagationResolvers for the
+// TXT record `name`, returning once every resolver returns `value`, or
+// failing once propagationTimeout elapses.
 func (c *Cloudflare) waitForPropagation(ctx context.Context, name, value string) error {
-	parts := strings.Split(name, ".")
-	if len(parts) < 2 {
-		return fmt.Errorf("invalid record name: %s", name)
-	}
-	zone := strings.Join(parts[len(parts)-2:], ".")
-
-	nss, err := net.DefaultResolver.LookupNS(ctx, zone)
-	if err != nil || len(nss) == 0 {
-		return fmt.Errorf("looking up NS for %s: %w", zone, err)
-	}
-
-	nsAddr := strings.TrimSuffix(nss[0].Host, ".") + ":53"
-	resolver := &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			d := net.Dialer{Timeout: 5 * time.Second}
-			return d.DialContext(ctx, "udp", nsAddr)
-		},
+	resolvers := make([]*net.Resolver, len(propagationResolvers))
+	for i, addr := range propagationResolvers {
+		addr := addr
+		resolvers[i] = &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 5 * time.Second}
+				return d.DialContext(ctx, "udp", addr)
+			},
+		}
 	}
 
 	deadline := time.Now().Add(propagationTimeout)
@@ -217,17 +224,31 @@ func (c *Cloudflare) waitForPropagation(ctx context.Context, name, value string)
 		default:
 		}
 
-		txts, err := resolver.LookupTXT(ctx, name)
-		if err == nil {
-			for _, t := range txts {
-				if t == value {
-					return nil
+		allVisible := true
+		var lastMissing string
+		for i, r := range resolvers {
+			txts, err := r.LookupTXT(ctx, name)
+			seen := false
+			if err == nil {
+				for _, t := range txts {
+					if t == value {
+						seen = true
+						break
+					}
 				}
 			}
+			if !seen {
+				allVisible = false
+				lastMissing = propagationResolvers[i]
+				break
+			}
+		}
+		if allVisible {
+			return nil
 		}
 
 		if time.Now().After(deadline) {
-			return fmt.Errorf("TXT %s with value %q not visible at %s within %s", name, value, nsAddr, propagationTimeout)
+			return fmt.Errorf("TXT %s with value %q not visible at %s within %s", name, value, lastMissing, propagationTimeout)
 		}
 		time.Sleep(propagationBackoff)
 	}
