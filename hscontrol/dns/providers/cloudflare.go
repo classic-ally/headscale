@@ -153,7 +153,7 @@ func (c *Cloudflare) SetRecord(ctx context.Context, name, recordType, value stri
 		return err
 	}
 
-	body := fmt.Sprintf(`{"type":"%s","name":"%s","content":"%s","ttl":120}`, recordType, name, value)
+	body := fmt.Sprintf(`{"type":"%s","name":"%s","content":"%s","ttl":60}`, recordType, name, value)
 
 	recordID, err := c.findRecord(ctx, zoneID, name, recordType)
 	if err != nil {
