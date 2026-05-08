@@ -5,9 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
+)
+
+// Propagation poll bounds for ACME DNS-01 TXT records. Cloudflare API
+// returns 200 on accept, but the record may not yet be visible at the
+// zone's authoritative NS. Returning before propagation makes the
+// downstream LE order race the validator and land in `invalid`.
+const (
+	propagationTimeout = 120 * time.Second
+	propagationBackoff = 2 * time.Second
 )
 
 // Cloudflare implements the DNSProvider interface using the Cloudflare API v4.
@@ -160,7 +171,66 @@ func (c *Cloudflare) SetRecord(ctx context.Context, name, recordType, value stri
 	if err != nil {
 		return fmt.Errorf("setting DNS record: %w", err)
 	}
+
+	// Wait for the record to be visible at the zone's authoritative NS
+	// before returning, so an ACME validator polled by the caller does not
+	// race propagation. Only TXT needs this — A/AAAA/CNAME callers do not
+	// trigger an immediate downstream check.
+	if recordType == "TXT" {
+		if err := c.waitForPropagation(ctx, name, value); err != nil {
+			return fmt.Errorf("waiting for TXT propagation: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// waitForPropagation polls the zone's authoritative NS for `name` (TXT)
+// until an entry matching `value` is observed, or the timeout elapses.
+// Resolution goes directly to the auth NS to bypass any caching resolver.
+func (c *Cloudflare) waitForPropagation(ctx context.Context, name, value string) error {
+	parts := strings.Split(name, ".")
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid record name: %s", name)
+	}
+	zone := strings.Join(parts[len(parts)-2:], ".")
+
+	nss, err := net.DefaultResolver.LookupNS(ctx, zone)
+	if err != nil || len(nss) == 0 {
+		return fmt.Errorf("looking up NS for %s: %w", zone, err)
+	}
+
+	nsAddr := strings.TrimSuffix(nss[0].Host, ".") + ":53"
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 5 * time.Second}
+			return d.DialContext(ctx, "udp", nsAddr)
+		},
+	}
+
+	deadline := time.Now().Add(propagationTimeout)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		txts, err := resolver.LookupTXT(ctx, name)
+		if err == nil {
+			for _, t := range txts {
+				if t == value {
+					return nil
+				}
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("TXT %s with value %q not visible at %s within %s", name, value, nsAddr, propagationTimeout)
+		}
+		time.Sleep(propagationBackoff)
+	}
 }
 
 func (c *Cloudflare) DeleteRecord(ctx context.Context, name, recordType string) error {
