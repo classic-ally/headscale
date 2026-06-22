@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -21,6 +22,13 @@ const (
 	propagationBackoff = 2 * time.Second
 )
 
+// txtResolver is the subset of *net.Resolver used to poll for TXT
+// propagation. Abstracting it lets tests inject a fake resolver instead of
+// querying the real public resolvers in propagationResolvers.
+type txtResolver interface {
+	LookupTXT(ctx context.Context, name string) ([]string, error)
+}
+
 // Cloudflare implements the DNSProvider interface using the Cloudflare API v4.
 type Cloudflare struct {
 	apiToken string
@@ -29,6 +37,13 @@ type Cloudflare struct {
 
 	mu      sync.Mutex
 	zoneIDs map[string]string // cached zone name → zone ID
+
+	// Test overrides. Zero values mean "use the package defaults": a nil
+	// resolvers slice builds net.Resolvers from propagationResolvers, and a
+	// zero duration uses propagationTimeout / propagationBackoff.
+	resolvers                  []txtResolver
+	propagationTimeoutOverride time.Duration
+	propagationBackoffOverride time.Duration
 }
 
 // NewCloudflare creates a new Cloudflare DNS provider.
@@ -204,19 +219,31 @@ var propagationResolvers = []string{
 // TXT record `name`, returning once every resolver returns `value`, or
 // failing once propagationTimeout elapses.
 func (c *Cloudflare) waitForPropagation(ctx context.Context, name, value string) error {
-	resolvers := make([]*net.Resolver, len(propagationResolvers))
-	for i, addr := range propagationResolvers {
-		addr := addr
-		resolvers[i] = &net.Resolver{
-			PreferGo: true,
-			Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				d := net.Dialer{Timeout: 5 * time.Second}
-				return d.DialContext(ctx, "udp", addr)
-			},
+	resolvers := c.resolvers
+	if resolvers == nil {
+		resolvers = make([]txtResolver, len(propagationResolvers))
+		for i, addr := range propagationResolvers {
+			resolvers[i] = &net.Resolver{
+				PreferGo: true,
+				Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					d := net.Dialer{Timeout: 5 * time.Second}
+					return d.DialContext(ctx, "udp", addr)
+				},
+			}
 		}
 	}
 
-	deadline := time.Now().Add(propagationTimeout)
+	timeout := propagationTimeout
+	if c.propagationTimeoutOverride > 0 {
+		timeout = c.propagationTimeoutOverride
+	}
+
+	backoff := propagationBackoff
+	if c.propagationBackoffOverride > 0 {
+		backoff = c.propagationBackoffOverride
+	}
+
+	deadline := time.Now().Add(timeout)
 	for {
 		select {
 		case <-ctx.Done():
@@ -239,7 +266,13 @@ func (c *Cloudflare) waitForPropagation(ctx context.Context, name, value string)
 			}
 			if !seen {
 				allVisible = false
-				lastMissing = propagationResolvers[i]
+
+				if i < len(propagationResolvers) {
+					lastMissing = propagationResolvers[i]
+				} else {
+					lastMissing = fmt.Sprintf("resolver[%d]", i)
+				}
+
 				break
 			}
 		}
@@ -248,11 +281,22 @@ func (c *Cloudflare) waitForPropagation(ctx context.Context, name, value string)
 		}
 
 		if time.Now().After(deadline) {
-			return fmt.Errorf("TXT %s with value %q not visible at %s within %s", name, value, lastMissing, propagationTimeout)
+			return fmt.Errorf("%w: %s=%q at %s within %s", errTXTNotVisible, name, value, lastMissing, timeout)
 		}
-		time.Sleep(propagationBackoff)
+
+		// Wait one backoff interval, but bail early if the context is
+		// cancelled so callers are not blocked past their deadline.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
 	}
 }
+
+// errTXTNotVisible is returned when a TXT record does not propagate to every
+// resolver before the propagation timeout elapses.
+var errTXTNotVisible = errors.New("TXT not visible")
 
 func (c *Cloudflare) DeleteRecord(ctx context.Context, name, recordType string) error {
 	zoneID, err := c.getZoneID(ctx, name)
