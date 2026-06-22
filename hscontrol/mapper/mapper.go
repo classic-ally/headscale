@@ -371,6 +371,40 @@ func (m *mapper) policyChangeResponse(
 	return builder.Build()
 }
 
+// wireGuardPeerChangeResponse handles changes to WireGuard-only peers.
+// These peers are stored separately from regular nodes and have different visibility rules.
+func (m *mapper) wireGuardPeerChangeResponse(
+	nodeID types.NodeID,
+	capVer tailcfg.CapabilityVersion,
+	wgPeerID types.NodeID,
+) (*tailcfg.MapResponse, error) {
+	// Fetch connection and peer atomically from single snapshot to avoid TOCTOU races
+	cp, exists := m.state.GetWireGuardConnectionWithPeer(nodeID, wgPeerID)
+	if !exists {
+		// Node doesn't have a connection to this peer - no update needed
+		return m.NewMapResponseBuilder(nodeID).
+			WithDebugType(changeResponseDebug).
+			Build()
+	}
+
+	return m.NewMapResponseBuilder(nodeID).
+		WithDebugType(changeResponseDebug).
+		WithCapabilityVersion(capVer).
+		WithWireGuardOnlyPeerChangeWithConnection(cp.Peer, cp.Connection).
+		Build()
+}
+
+// wireGuardPeerRemovedResponse creates a MapResponse for WireGuard-only peer removal.
+func (m *mapper) wireGuardPeerRemovedResponse(
+	nodeID types.NodeID,
+	wgPeerID types.NodeID,
+) (*tailcfg.MapResponse, error) {
+	return m.NewMapResponseBuilder(nodeID).
+		WithDebugType(removeResponseDebug).
+		WithPeersRemoved(wgPeerID).
+		Build()
+}
+
 // buildFromChange builds a MapResponse from a change.Change specification.
 // This provides fine-grained control over what gets included in the response.
 func (m *mapper) buildFromChange(
@@ -386,6 +420,26 @@ func (m *mapper) buildFromChange(
 	// send a self-update response to ensure the node sees its own changes.
 	if resp.OriginNode != 0 && resp.OriginNode == nodeID {
 		return m.selfMapResponse(nodeID, capVer)
+	}
+
+	// WireGuard-only peer changes are handled separately from regular peer changes.
+	if resp.WireGuardPeerChanged {
+		return m.wireGuardPeerChangeResponse(nodeID, capVer, resp.WireGuardPeerID)
+	}
+	if resp.WireGuardPeerRemoved {
+		return m.wireGuardPeerRemovedResponse(nodeID, resp.WireGuardPeerID)
+	}
+	if resp.WireGuardConnChanged {
+		if resp.TargetNode != nodeID {
+			return nil, nil //nolint:nilnil // Only the targeted node receives connection updates
+		}
+		return m.wireGuardPeerChangeResponse(nodeID, capVer, resp.WireGuardPeerID)
+	}
+	if resp.WireGuardConnRemoved {
+		if resp.TargetNode != nodeID {
+			return nil, nil //nolint:nilnil // Only the targeted node receives connection removal updates
+		}
+		return m.wireGuardPeerRemovedResponse(nodeID, resp.WireGuardPeerID)
 	}
 
 	builder := m.NewMapResponseBuilder(nodeID).

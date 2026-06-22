@@ -38,6 +38,14 @@ type Change struct {
 	// must be computed at runtime per-node. Used for policy changes
 	// where each node may have different peer visibility.
 	RequiresRuntimePeerComputation bool
+
+	// WireGuard-specific fields.
+	// These peers do not run Tailscale clients and therefore never receive map updates.
+	WireGuardPeerID      types.NodeID // ID of the WG peer being changed
+	WireGuardPeerChanged bool         // True when a WG peer was added/updated
+	WireGuardPeerRemoved bool         // True when a WG peer was deleted
+	WireGuardConnChanged bool         // True when a connection was added (use TargetNode)
+	WireGuardConnRemoved bool         // True when a connection was removed (use TargetNode)
 }
 
 // boolFieldNames returns all boolean field names for exhaustive testing.
@@ -52,6 +60,10 @@ func (r Change) boolFieldNames() []string {
 		"IncludePolicy",
 		"SendAllPeers",
 		"RequiresRuntimePeerComputation",
+		"WireGuardPeerChanged",
+		"WireGuardPeerRemoved",
+		"WireGuardConnChanged",
+		"WireGuardConnRemoved",
 	}
 }
 
@@ -98,6 +110,11 @@ func (r Change) IsEmpty() bool {
 	}
 
 	if r.RequiresRuntimePeerComputation {
+		return false
+	}
+
+	if r.WireGuardPeerChanged || r.WireGuardPeerRemoved ||
+		r.WireGuardConnChanged || r.WireGuardConnRemoved {
 		return false
 	}
 
@@ -155,6 +172,11 @@ func (r Change) Type() string {
 
 	if r.IncludeDERPMap || r.IncludeDNS || r.IncludeDomain || r.IncludePolicy {
 		return "config"
+	}
+
+	if r.WireGuardPeerChanged || r.WireGuardPeerRemoved ||
+		r.WireGuardConnChanged || r.WireGuardConnRemoved {
+		return "wireguard"
 	}
 
 	return "unknown"
@@ -469,5 +491,48 @@ func DomainCertBroadcast() Change {
 	return Change{
 		Reason:     "domain cert broadcast",
 		IncludeDNS: true,
+	}
+}
+
+// WireGuard-specific constructors
+
+// WireGuardPeerAdded returns a Change for when a WG peer was added or updated.
+// All nodes in the tailnet may need to see the new peer (if they have a connection to it).
+func WireGuardPeerAdded(wgPeerID types.NodeID) Change {
+	return Change{
+		Reason:               "wireguard peer added/updated",
+		WireGuardPeerID:      wgPeerID,
+		WireGuardPeerChanged: true,
+	}
+}
+
+// WireGuardPeerDeleted returns a Change for when a WG peer was removed.
+func WireGuardPeerDeleted(wgPeerID types.NodeID) Change {
+	return Change{
+		Reason:               "wireguard peer removed",
+		WireGuardPeerID:      wgPeerID,
+		WireGuardPeerRemoved: true,
+	}
+}
+
+// WireGuardConnectionCreated returns a Change for when a connection from a tailnet
+// node to a WG peer was created. Only the specific node needs to be updated.
+func WireGuardConnectionCreated(nodeID, wgPeerID types.NodeID) Change {
+	return Change{
+		Reason:               "wireguard connection created",
+		TargetNode:           nodeID,
+		WireGuardPeerID:      wgPeerID,
+		WireGuardConnChanged: true,
+	}
+}
+
+// WireGuardConnectionDeleted returns a Change for when a connection from a tailnet
+// node to a WG peer was deleted. Only the specific node needs to be updated.
+func WireGuardConnectionDeleted(nodeID, wgPeerID types.NodeID) Change {
+	return Change{
+		Reason:               "wireguard connection removed",
+		TargetNode:           nodeID,
+		WireGuardPeerID:      wgPeerID,
+		WireGuardConnRemoved: true,
 	}
 }

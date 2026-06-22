@@ -585,6 +585,110 @@ AND auth_key_id NOT IN (
 				},
 				Rollback: func(db *gorm.DB) error { return nil },
 			},
+			// Add wireguard_only_peers table and node_wg_peer_connections table for external WireGuard peer support.
+			{
+				ID: "202511130000",
+				Migrate: func(tx *gorm.DB) error {
+					// Common columns shared between SQLite and PostgreSQL.
+					// Database-specific types are parameterized with %s placeholders.
+					commonColumns := `
+  name text UNIQUE NOT NULL,
+  user_id %s NOT NULL,
+  public_key text NOT NULL,
+  allowed_ips text NOT NULL,
+  endpoints text NOT NULL,
+  ipv4 text,
+  ipv6 text,
+  extra_config text,
+
+  created_at %s,
+  updated_at %s,
+  deleted_at %s,
+
+  CONSTRAINT fk_wireguard_only_peers_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+`
+
+					if cfg.Database.Type == types.DatabaseSqlite {
+						createTableSQL := fmt.Sprintf(`
+CREATE TABLE IF NOT EXISTS wireguard_only_peers(
+  id integer PRIMARY KEY AUTOINCREMENT,
+%s)`,
+							fmt.Sprintf(commonColumns, "integer", "datetime", "datetime", "datetime"))
+
+						err := tx.Exec(createTableSQL).Error
+						if err != nil {
+							return fmt.Errorf("creating wireguard_only_peers table: %w", err)
+						}
+
+						err = tx.Exec(`
+INSERT OR REPLACE INTO sqlite_sequence (name, seq)
+VALUES ('wireguard_only_peers', ?)`,
+							types.WireGuardOnlyPeerIDOffset-1).Error
+						if err != nil {
+							return fmt.Errorf("initializing wireguard_only_peers sequence: %w", err)
+						}
+
+						// Create the connections table
+						err = tx.Exec(`
+CREATE TABLE IF NOT EXISTS node_wg_peer_connections(
+  node_id integer NOT NULL,
+  wg_peer_id integer NOT NULL,
+  ipv4_masq_addr text,
+  ipv6_masq_addr text,
+  created_at datetime,
+
+  PRIMARY KEY (node_id, wg_peer_id),
+  CONSTRAINT fk_connections_node FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE,
+  CONSTRAINT fk_connections_wg_peer FOREIGN KEY(wg_peer_id) REFERENCES wireguard_only_peers(id) ON DELETE CASCADE,
+  CONSTRAINT check_at_least_one_masq_addr CHECK (ipv4_masq_addr IS NOT NULL OR ipv6_masq_addr IS NOT NULL)
+)`).Error
+						if err != nil {
+							return fmt.Errorf("creating node_wg_peer_connections table: %w", err)
+						}
+					} else if cfg.Database.Type == types.DatabasePostgres {
+						createTableSQL := fmt.Sprintf(`
+CREATE TABLE IF NOT EXISTS wireguard_only_peers(
+  id BIGSERIAL PRIMARY KEY,
+%s)`,
+							fmt.Sprintf(commonColumns, "bigint", "timestamp with time zone", "timestamp with time zone", "timestamp with time zone"))
+
+						err := tx.Exec(createTableSQL).Error
+						if err != nil {
+							return fmt.Errorf("creating wireguard_only_peers table: %w", err)
+						}
+
+						// PostgreSQL ALTER SEQUENCE doesn't support parameterized queries, so we use fmt.Sprintf.
+						// This is safe because WireGuardOnlyPeerIDOffset is a compile-time constant from our code.
+						err = tx.Exec(fmt.Sprintf(`
+ALTER SEQUENCE wireguard_only_peers_id_seq RESTART WITH %d
+						`, types.WireGuardOnlyPeerIDOffset)).Error
+						if err != nil {
+							return fmt.Errorf("initializing wireguard_only_peers sequence: %w", err)
+						}
+
+						// Create the connections table
+						err = tx.Exec(`
+CREATE TABLE IF NOT EXISTS node_wg_peer_connections(
+  node_id bigint NOT NULL,
+  wg_peer_id bigint NOT NULL,
+  ipv4_masq_addr text,
+  ipv6_masq_addr text,
+  created_at timestamp with time zone,
+
+  PRIMARY KEY (node_id, wg_peer_id),
+  CONSTRAINT fk_connections_node FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE,
+  CONSTRAINT fk_connections_wg_peer FOREIGN KEY(wg_peer_id) REFERENCES wireguard_only_peers(id) ON DELETE CASCADE,
+  CONSTRAINT check_at_least_one_masq_addr CHECK (ipv4_masq_addr IS NOT NULL OR ipv6_masq_addr IS NOT NULL)
+)`).Error
+						if err != nil {
+							return fmt.Errorf("creating node_wg_peer_connections table: %w", err)
+						}
+					}
+
+					return nil
+				},
+				Rollback: func(db *gorm.DB) error { return nil },
+			},
 			{
 				// Rename forced_tags column to tags in nodes table.
 				// This must run after migration 202505141324 which creates tables with forced_tags.
@@ -781,6 +885,8 @@ CREATE TABLE domain_access(
 			&types.APIKey{},
 			&types.Node{},
 			&types.Policy{},
+			&types.WireGuardOnlyPeer{},
+			&types.WireGuardConnection{},
 		)
 		if err != nil {
 			return err

@@ -1,6 +1,7 @@
 package mapper
 
 import (
+	"fmt"
 	"net/netip"
 	"sort"
 	"time"
@@ -30,6 +31,7 @@ const (
 	selfResponseDebug   debugType = "self"
 	changeResponseDebug debugType = "change"
 	policyResponseDebug debugType = "policy"
+	removeResponseDebug debugType = "remove"
 )
 
 // NewMapResponseBuilder creates a new builder with basic fields set.
@@ -221,7 +223,27 @@ func (b *MapResponseBuilder) WithPeerChanges(peers views.Slice[types.NodeView]) 
 		return b
 	}
 
-	b.resp.PeersChanged = tailPeers
+	if b.resp.PeersChanged == nil {
+		b.resp.PeersChanged = []*tailcfg.Node{}
+	}
+	b.resp.PeersChanged = append(b.resp.PeersChanged, tailPeers...)
+
+	return b
+}
+
+// WithWireGuardOnlyPeerChangeWithConnection adds a single WireGuard-only peer change with connection-specific
+// masquerade addresses for incremental updates.
+func (b *MapResponseBuilder) WithWireGuardOnlyPeerChangeWithConnection(wgPeer *types.WireGuardOnlyPeer, conn *types.WireGuardConnection) *MapResponseBuilder {
+	tailPeer, err := wgPeer.ToTailcfgNode(conn)
+	if err != nil {
+		b.addError(fmt.Errorf("converting wireguard-only peer to tailcfg node: %w", err))
+		return b
+	}
+
+	if b.resp.PeersChanged == nil {
+		b.resp.PeersChanged = []*tailcfg.Node{}
+	}
+	b.resp.PeersChanged = append(b.resp.PeersChanged, tailPeer)
 
 	return b
 }
@@ -259,6 +281,16 @@ func (b *MapResponseBuilder) buildTailPeers(peers views.Slice[types.NodeView]) (
 		b.mapper.cfg)
 	if err != nil {
 		return nil, err
+	}
+
+	// Fetch connections with peers atomically from single snapshot to avoid TOCTOU races
+	connPeers := b.mapper.state.GetWireGuardConnectionsWithPeersForNode(b.nodeID)
+	for _, cp := range connPeers {
+		tailPeer, err := cp.Peer.ToTailcfgNode(cp.Connection)
+		if err != nil {
+			return nil, err
+		}
+		tailPeers = append(tailPeers, tailPeer)
 	}
 
 	// Peers is always returned sorted by Node.ID.

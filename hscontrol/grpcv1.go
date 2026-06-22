@@ -5,6 +5,7 @@ package hscontrol
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +29,7 @@ import (
 	v1 "github.com/juanfont/headscale/gen/go/headscale/v1"
 	"github.com/juanfont/headscale/hscontrol/state"
 	"github.com/juanfont/headscale/hscontrol/types"
+	"github.com/juanfont/headscale/hscontrol/types/change"
 	"github.com/juanfont/headscale/hscontrol/util"
 	"github.com/juanfont/headscale/hscontrol/util/zlog/zf"
 )
@@ -432,19 +434,32 @@ func (api headscaleV1APIServer) DeleteNode(
 	ctx context.Context,
 	request *v1.DeleteNodeRequest,
 ) (*v1.DeleteNodeResponse, error) {
-	node, ok := api.h.state.GetNodeByID(types.NodeID(request.GetNodeId()))
-	if !ok {
-		return nil, status.Errorf(codes.NotFound, "node not found")
+	nodeID := request.GetNodeId()
+
+	if nodeID >= types.WireGuardOnlyPeerIDOffset {
+		nodeChange, err := api.h.state.DeleteWireGuardOnlyPeer(nodeID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to delete wireguard-only peer: %s", err)
+		}
+
+		api.h.Change(nodeChange)
+
+		return &v1.DeleteNodeResponse{}, nil
+	} else {
+		node, ok := api.h.state.GetNodeByID(types.NodeID(nodeID))
+		if !ok {
+			return nil, status.Errorf(codes.NotFound, "node not found")
+		}
+
+		nodeChange, err := api.h.state.DeleteNode(node)
+		if err != nil {
+			return nil, err
+		}
+
+		api.h.Change(nodeChange)
+
+		return &v1.DeleteNodeResponse{}, nil
 	}
-
-	nodeChange, err := api.h.state.DeleteNode(node)
-	if err != nil {
-		return nil, err
-	}
-
-	api.h.Change(nodeChange)
-
-	return &v1.DeleteNodeResponse{}, nil
 }
 
 func (api headscaleV1APIServer) ExpireNode(
@@ -530,6 +545,9 @@ func (api headscaleV1APIServer) ListNodes(
 	// the filtering of nodes by user, vs nodes as a whole can
 	// probably be done once.
 	// TODO(kradalby): This should be done in one tx.
+	var nodeProtos []*v1.Node
+	var wgPeerProtos []*v1.WireGuardOnlyPeer
+
 	if request.GetUser() != "" {
 		user, err := api.h.state.GetUserByName(request.GetUser())
 		if err != nil {
@@ -537,15 +555,36 @@ func (api headscaleV1APIServer) ListNodes(
 		}
 
 		nodes := api.h.state.ListNodesByUser(types.UserID(user.ID))
+		nodeProtos = nodesToProto(api.h.state, nodes)
 
-		response := nodesToProto(api.h.state, nodes)
-		return &v1.ListNodesResponse{Nodes: response}, nil
+		userID := uint(user.ID)
+		wgPeers, err := api.h.state.ListWireGuardOnlyPeers(&userID)
+		if err != nil {
+			return nil, err
+		}
+		wgPeerProtos = wgPeersToProto(wgPeers)
+	} else {
+		nodes := api.h.state.ListNodes()
+		nodeProtos = nodesToProto(api.h.state, nodes)
+
+		wgPeers, err := api.h.state.ListWireGuardOnlyPeers(nil)
+		if err != nil {
+			return nil, err
+		}
+		wgPeerProtos = wgPeersToProto(wgPeers)
 	}
 
-	nodes := api.h.state.ListNodes()
+	connections := api.h.state.ListAllWireGuardConnections()
+	connectionProtos := make([]*v1.WireGuardConnection, len(connections))
+	for i, conn := range connections {
+		connectionProtos[i] = conn.ToProto()
+	}
 
-	response := nodesToProto(api.h.state, nodes)
-	return &v1.ListNodesResponse{Nodes: response}, nil
+	return &v1.ListNodesResponse{
+		Nodes:                nodeProtos,
+		WireguardOnlyPeers:   wgPeerProtos,
+		WireguardConnections: connectionProtos,
+	}, nil
 }
 
 func nodesToProto(state *state.State, nodes views.Slice[types.NodeView]) []*v1.Node {
@@ -567,6 +606,14 @@ func nodesToProto(state *state.State, nodes views.Slice[types.NodeView]) []*v1.N
 		return response[i].Id < response[j].Id
 	})
 
+	return response
+}
+
+func wgPeersToProto(peers types.WireGuardOnlyPeers) []*v1.WireGuardOnlyPeer {
+	response := make([]*v1.WireGuardOnlyPeer, len(peers))
+	for i, peer := range peers {
+		response[i] = peer.Proto()
+	}
 	return response
 }
 
@@ -834,6 +881,217 @@ func (api headscaleV1APIServer) DebugCreateNode(
 	api.h.state.SetAuthCacheEntry(registrationId, authRegReq)
 
 	return &v1.DebugCreateNodeResponse{Node: newNode.Proto()}, nil
+}
+
+func parseWireGuardOnlyPeerFromRequest(
+	name string,
+	userID uint,
+	publicKeyStr string,
+	allowedIPsStr []string,
+	endpointsStr []string,
+	extraConfigJSON *string,
+) (*types.WireGuardOnlyPeer, error) {
+	var publicKey key.NodePublic
+	if err := publicKey.UnmarshalText([]byte(publicKeyStr)); err != nil {
+		return nil, fmt.Errorf("invalid public key: %w", err)
+	}
+
+	allowedIPs := make([]netip.Prefix, 0, len(allowedIPsStr))
+	for _, ipStr := range allowedIPsStr {
+		prefix, err := netip.ParsePrefix(ipStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid allowed IP %q: %w", ipStr, err)
+		}
+		allowedIPs = append(allowedIPs, prefix)
+	}
+
+	endpoints := make([]netip.AddrPort, 0, len(endpointsStr))
+	for _, epStr := range endpointsStr {
+		addrPort, err := netip.ParseAddrPort(epStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid endpoint %q: %w", epStr, err)
+		}
+		endpoints = append(endpoints, addrPort)
+	}
+
+	// Parse and validate extra config JSON
+	var extraConfig *types.WireGuardOnlyPeerExtraConfig
+	if extraConfigJSON != nil && *extraConfigJSON != "" {
+		extraConfig = &types.WireGuardOnlyPeerExtraConfig{}
+		if err := json.Unmarshal([]byte(*extraConfigJSON), extraConfig); err != nil {
+			return nil, fmt.Errorf("invalid extra-config JSON: %w", err)
+		}
+	}
+
+	peer := &types.WireGuardOnlyPeer{
+		Name:        name,
+		UserID:      types.UserID(userID),
+		PublicKey:   publicKey,
+		AllowedIPs:  allowedIPs,
+		Endpoints:   endpoints,
+		ExtraConfig: extraConfig,
+	}
+
+	return peer, nil
+}
+
+func (api headscaleV1APIServer) RegisterWireGuardOnlyPeer(
+	ctx context.Context,
+	request *v1.RegisterWireGuardOnlyPeerRequest,
+) (*v1.RegisterWireGuardOnlyPeerResponse, error) {
+	peer, err := parseWireGuardOnlyPeerFromRequest(
+		request.GetName(),
+		uint(request.GetUserId()),
+		request.GetPublicKey(),
+		request.GetAllowedIps(),
+		request.GetEndpoints(),
+		request.ExtraConfig,
+	)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid request: %s", err)
+	}
+
+	// Create the peer (this allocates IPs and stores in database)
+	if err := api.h.state.CreateWireGuardOnlyPeer(peer); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create wireguard-only peer: %s", err)
+	}
+
+	log.Info().
+		Str("name", peer.Name).
+		Uint64("id", uint64(peer.ID)).
+		Uint64("user_id", uint64(peer.UserID)).
+		Msg("WireGuard-only peer registered")
+
+	api.h.Change(change.WireGuardPeerAdded(peer.ID))
+
+	return &v1.RegisterWireGuardOnlyPeerResponse{
+		Peer: peer.Proto(),
+	}, nil
+}
+
+// GetWireGuardOnlyPeer retrieves a WireGuard-only peer by ID.
+func (api headscaleV1APIServer) GetWireGuardOnlyPeer(
+	ctx context.Context,
+	request *v1.GetWireGuardOnlyPeerRequest,
+) (*v1.GetWireGuardOnlyPeerResponse, error) {
+	peer, err := api.h.state.GetWireGuardOnlyPeerByID(request.GetPeerId())
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "peer not found: %s", err)
+	}
+
+	return &v1.GetWireGuardOnlyPeerResponse{
+		Peer: peer.Proto(),
+	}, nil
+}
+
+// ListWireGuardOnlyPeers lists all WireGuard-only peers, optionally filtered by user.
+func (api headscaleV1APIServer) ListWireGuardOnlyPeers(
+	ctx context.Context,
+	request *v1.ListWireGuardOnlyPeersRequest,
+) (*v1.ListWireGuardOnlyPeersResponse, error) {
+	var userID *uint
+	if request.UserId != nil && *request.UserId != 0 {
+		uid := uint(*request.UserId)
+		userID = &uid
+	}
+
+	peers, err := api.h.state.ListWireGuardOnlyPeers(userID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list wireguard-only peers: %s", err)
+	}
+
+	response := make([]*v1.WireGuardOnlyPeer, len(peers))
+	for i, peer := range peers {
+		response[i] = peer.Proto()
+	}
+
+	sort.Slice(response, func(i, j int) bool {
+		return response[i].Id < response[j].Id
+	})
+
+	return &v1.ListWireGuardOnlyPeersResponse{
+		Peers: response,
+	}, nil
+}
+
+// CreateWireGuardConnection creates a connection between a node and a WireGuard-only peer.
+func (api headscaleV1APIServer) CreateWireGuardConnection(
+	ctx context.Context,
+	request *v1.CreateWireGuardConnectionRequest,
+) (*v1.CreateWireGuardConnectionResponse, error) {
+	var ipv4MasqAddr *netip.Addr
+	if request.Ipv4MasqAddr != nil && *request.Ipv4MasqAddr != "" {
+		addr, err := netip.ParseAddr(*request.Ipv4MasqAddr)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid IPv4 masquerade address: %s", err)
+		}
+		if !addr.Is4() {
+			return nil, status.Errorf(codes.InvalidArgument, "IPv4 masquerade address must be an IPv4 address")
+		}
+		ipv4MasqAddr = &addr
+	}
+
+	var ipv6MasqAddr *netip.Addr
+	if request.Ipv6MasqAddr != nil && *request.Ipv6MasqAddr != "" {
+		addr, err := netip.ParseAddr(*request.Ipv6MasqAddr)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid IPv6 masquerade address: %s", err)
+		}
+		if !addr.Is6() {
+			return nil, status.Errorf(codes.InvalidArgument, "IPv6 masquerade address must be an IPv6 address")
+		}
+		ipv6MasqAddr = &addr
+	}
+
+	if ipv4MasqAddr == nil && ipv6MasqAddr == nil {
+		return nil, status.Errorf(codes.InvalidArgument, "at least one masquerade address (IPv4 or IPv6) must be specified")
+	}
+
+	conn := &types.WireGuardConnection{
+		NodeID:       types.NodeID(request.GetNodeId()),
+		WGPeerID:     types.NodeID(request.GetWgPeerId()),
+		IPv4MasqAddr: ipv4MasqAddr,
+		IPv6MasqAddr: ipv6MasqAddr,
+	}
+
+	changeSet, err := api.h.state.CreateWireGuardConnection(conn)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create connection: %s", err)
+	}
+
+	log.Info().
+		Uint64("node_id", uint64(conn.NodeID)).
+		Uint64("wg_peer_id", uint64(conn.WGPeerID)).
+		Msg("WireGuard connection created")
+
+	api.h.Change(changeSet)
+
+	return &v1.CreateWireGuardConnectionResponse{
+		Connection: conn.ToProto(),
+	}, nil
+}
+
+// DeleteWireGuardConnection removes a connection between a node and a WireGuard-only peer.
+func (api headscaleV1APIServer) DeleteWireGuardConnection(
+	ctx context.Context,
+	request *v1.DeleteWireGuardConnectionRequest,
+) (*v1.DeleteWireGuardConnectionResponse, error) {
+	nodeID := types.NodeID(request.GetNodeId())
+	wgPeerID := types.NodeID(request.GetWgPeerId())
+
+	changeSet, err := api.h.state.DeleteWireGuardConnection(nodeID, wgPeerID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete connection: %s", err)
+	}
+
+	log.Info().
+		Uint64("node_id", uint64(nodeID)).
+		Uint64("wg_peer_id", uint64(wgPeerID)).
+		Msg("WireGuard connection deleted")
+
+	api.h.Change(changeSet)
+
+	return &v1.DeleteWireGuardConnectionResponse{}, nil
 }
 
 func (api headscaleV1APIServer) Health(

@@ -1,0 +1,77 @@
+syntax = "proto3";
+package headscale.v1;
+
+import "google/protobuf/timestamp.proto";
+import "headscale/v1/user.proto";
+
+option go_package = "github.com/juanfont/headscale/gen/go/v1";
+
+// WireGuardOnlyPeer represents an external WireGuard peer that does not run
+// a Tailscale client. These peers are manually configured and statically defined.
+// Visibility and masquerade addresses are managed through the WireGuardConnection
+// model (see wireguard_connection.proto).
+message WireGuardOnlyPeer {
+  uint64 id = 1;
+  string name = 2;
+  User user = 3;
+
+  // WireGuard public key of the peer
+  string public_key = 4;
+
+  // AllowedIPs that the WireGuard-only peer is allowed to route
+  // Typically includes exit routes like 0.0.0.0/0 and ::/0
+  repeated string allowed_ips = 6;
+
+  // WireGuard endpoints where the peer can be reached
+  repeated string endpoints = 7;
+
+  // Auto-allocated tailnet IP addresses for the peer
+  string ipv4 = 10;
+  string ipv6 = 11;
+
+  // JSON string containing extra configuration (exit node settings, tags, location)
+  string extra_config = 12;
+
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+}
+
+message RegisterWireGuardOnlyPeerRequest {
+  // Human-readable name for the peer
+  string name = 1;
+  uint64 user_id = 2;
+  string public_key = 3;
+
+  repeated string allowed_ips = 5;
+  repeated string endpoints = 6;
+
+  // Optional extra configuration as JSON
+  optional string extra_config = 9;
+}
+
+message RegisterWireGuardOnlyPeerResponse {
+  WireGuardOnlyPeer peer = 1;
+}
+
+message ListWireGuardOnlyPeersRequest {
+  // Optional: filter by user ID
+  optional uint64 user_id = 1;
+}
+
+message ListWireGuardOnlyPeersResponse {
+  repeated WireGuardOnlyPeer peers = 1;
+}
+
+message DeleteWireGuardOnlyPeerRequest {
+  uint64 peer_id = 1;
+}
+
+message DeleteWireGuardOnlyPeerResponse {}
+
+message GetWireGuardOnlyPeerRequest {
+  uint64 peer_id = 1;
+}
+
+message GetWireGuardOnlyPeerResponse {
+  WireGuardOnlyPeer peer = 1;
+}

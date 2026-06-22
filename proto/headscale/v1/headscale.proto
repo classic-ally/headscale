@@ -11,6 +11,8 @@ import "headscale/v1/apikey.proto";
 import "headscale/v1/auth.proto";
 import "headscale/v1/policy.proto";
 import "headscale/v1/domain.proto";
+import "headscale/v1/wireguard_only_peer.proto";
+import "headscale/v1/wireguard_connection.proto";
 
 service HeadscaleService {
   // --- User start ---
@@ -163,6 +165,39 @@ service HeadscaleService {
     };
   }
   // --- Auth end ---
+
+  // --- WireGuard-Only Peers start ---
+  rpc RegisterWireGuardOnlyPeer(RegisterWireGuardOnlyPeerRequest)
+      returns (RegisterWireGuardOnlyPeerResponse) {
+    option (google.api.http) = {
+      post : "/api/v1/wireguard-only-peer/register"
+      body : "*"
+    };
+  }
+
+  rpc GetWireGuardOnlyPeer(GetWireGuardOnlyPeerRequest)
+      returns (GetWireGuardOnlyPeerResponse) {
+    option (google.api.http) = {
+      get : "/api/v1/wireguard-only-peer/{peer_id}"
+    };
+  }
+
+  rpc CreateWireGuardConnection(CreateWireGuardConnectionRequest)
+      returns (CreateWireGuardConnectionResponse) {
+    option (google.api.http) = {
+      post : "/api/v1/wireguard/connection"
+      body : "*"
+    };
+  }
+
+  rpc DeleteWireGuardConnection(DeleteWireGuardConnectionRequest)
+      returns (DeleteWireGuardConnectionResponse) {
+    option (google.api.http) = {
+      delete : "/api/v1/wireguard/connection/{node_id}/{wg_peer_id}"
+    };
+  }
+
+  // --- WireGuard-Only Peers end ---
 
   // --- ApiKeys start ---
   rpc CreateApiKey(CreateApiKeyRequest) returns (CreateApiKeyResponse) {

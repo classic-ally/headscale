@@ -19,8 +19,7 @@ func TestEphemeralNodeDeleteWithConcurrentUpdate(t *testing.T) {
 	node := createTestNode(1, 1, "test-user", "test-node")
 
 	// Create NodeStore
-	store := NewNodeStore(nil, allowAllPeersFunc, TestBatchSize, TestBatchTimeout)
-
+	store := NewNodeStore(nil, nil, nil, allowAllPeersFunc, TestBatchSize, TestBatchTimeout)
 	store.Start()
 	defer store.Stop()
 
@@ -96,8 +95,7 @@ func TestUpdateNodeReturnsInvalidWhenDeletedInSameBatch(t *testing.T) {
 	node := createTestNode(2, 1, "test-user", "test-node-2")
 
 	// Use batch size of 2 to guarantee UpdateNode and DeleteNode batch together
-	store := NewNodeStore(nil, allowAllPeersFunc, 2, TestBatchTimeout)
-
+	store := NewNodeStore(nil, nil, nil, allowAllPeersFunc, 2, TestBatchTimeout)
 	store.Start()
 	defer store.Stop()
 
@@ -154,8 +152,7 @@ func TestUpdateNodeReturnsInvalidWhenDeletedInSameBatch(t *testing.T) {
 func TestPersistNodeToDBPreventsRaceCondition(t *testing.T) {
 	node := createTestNode(3, 1, "test-user", "test-node-3")
 
-	store := NewNodeStore(nil, allowAllPeersFunc, TestBatchSize, TestBatchTimeout)
-
+	store := NewNodeStore(nil, nil, nil, allowAllPeersFunc, TestBatchSize, TestBatchTimeout)
 	store.Start()
 	defer store.Stop()
 
@@ -211,8 +208,7 @@ func TestEphemeralNodeLogoutRaceCondition(t *testing.T) {
 	}
 
 	// Use batch size of 2 to guarantee UpdateNode and DeleteNode batch together
-	store := NewNodeStore(nil, allowAllPeersFunc, 2, TestBatchTimeout)
-
+	store := NewNodeStore(nil, nil, nil, allowAllPeersFunc, 2, TestBatchTimeout)
 	store.Start()
 	defer store.Stop()
 
@@ -291,9 +287,7 @@ func TestUpdateNodeFromMapRequestEphemeralLogoutSequence(t *testing.T) {
 	}
 
 	// Use batch size of 2 to guarantee UpdateNode and DeleteNode batch together
-	// Use batch size of 2 to guarantee UpdateNode and DeleteNode batch together
-	store := NewNodeStore(nil, allowAllPeersFunc, 2, TestBatchTimeout)
-
+	store := NewNodeStore(nil, nil, nil, allowAllPeersFunc, 2, TestBatchTimeout)
 	store.Start()
 	defer store.Stop()
 
@@ -363,8 +357,7 @@ func TestUpdateNodeDeletedInSameBatchReturnsInvalid(t *testing.T) {
 	node := createTestNode(6, 1, "test-user", "test-node-6")
 
 	// Use batch size of 2 to guarantee UpdateNode and DeleteNode batch together
-	store := NewNodeStore(nil, allowAllPeersFunc, 2, TestBatchTimeout)
-
+	store := NewNodeStore(nil, nil, nil, allowAllPeersFunc, 2, TestBatchTimeout)
 	store.Start()
 	defer store.Stop()
 
@@ -424,8 +417,7 @@ func TestPersistNodeToDBChecksNodeStoreBeforePersist(t *testing.T) {
 		Ephemeral: true,
 	}
 
-	store := NewNodeStore(nil, allowAllPeersFunc, TestBatchSize, TestBatchTimeout)
-
+	store := NewNodeStore(nil, nil, nil, allowAllPeersFunc, TestBatchSize, TestBatchTimeout)
 	store.Start()
 	defer store.Stop()
 

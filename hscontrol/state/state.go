@@ -179,6 +179,16 @@ func NewState(cfg *types.Config) (*State, error) {
 		return nil, fmt.Errorf("loading users: %w", err)
 	}
 
+	wgPeers, err := db.ListWireGuardOnlyPeers(nil) // nil = all users
+	if err != nil {
+		return nil, fmt.Errorf("loading wireguard-only peers: %w", err)
+	}
+
+	connections, err := db.ListAllWireGuardConnections()
+	if err != nil {
+		return nil, fmt.Errorf("loading wireguard connections: %w", err)
+	}
+
 	pol, err := hsdb.PolicyBytes(db.DB, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("loading policy: %w", err)
@@ -205,6 +215,8 @@ func NewState(cfg *types.Config) (*State, error) {
 	// This moves the complex peer relationship logic into the policy package where it belongs.
 	nodeStore := NewNodeStore(
 		nodes,
+		wgPeers,
+		connections,
 		func(nodes []types.NodeView) map[types.NodeID][]types.NodeView {
 			return polMan.BuildPeerMap(views.SliceOf(nodes))
 		},
@@ -711,6 +723,148 @@ func (s *State) ListPeers(nodeID types.NodeID, peerIDs ...types.NodeID) views.Sl
 	}
 
 	return views.SliceOf(filteredNodes)
+}
+
+// GetWireGuardOnlyPeersForNode retrieves all WireGuard-only peers that are visible
+// to the specified node. A node can see a WireGuard-only peer if the node's ID
+// is in the peer's KnownNodeIDs list.
+// This is called for every MapRequest (HOT PATH) - uses NodeStore cache.
+func (s *State) GetWireGuardOnlyPeersForNode(nodeID types.NodeID) (types.WireGuardOnlyPeers, error) {
+	return s.nodeStore.ListWGPeersForNode(nodeID), nil
+}
+
+// CreateWireGuardOnlyPeer creates a new WireGuard-only peer, allocating IP addresses
+// for it and storing it in the database and NodeStore cache.
+func (s *State) CreateWireGuardOnlyPeer(peer *types.WireGuardOnlyPeer) error {
+
+	ipv4, ipv6, err := s.ipAlloc.Next()
+	if err != nil {
+		return fmt.Errorf("allocating IP addresses: %w", err)
+	}
+
+	peer.IPv4 = ipv4
+	peer.IPv6 = ipv6
+
+	if err := s.db.CreateWireGuardOnlyPeer(peer); err != nil {
+		return fmt.Errorf("creating wireguard-only peer in database: %w", err)
+	}
+
+	s.nodeStore.PutWGPeer(peer)
+
+	log.Info().
+		Str("name", peer.Name).
+		Uint64("id", uint64(peer.ID)).
+		Str("ipv4", func() string {
+			if ipv4 != nil {
+				return ipv4.String()
+			}
+			return "none"
+		}()).
+		Str("ipv6", func() string {
+			if ipv6 != nil {
+				return ipv6.String()
+			}
+			return "none"
+		}()).
+		Msg("Created WireGuard-only peer")
+
+	return nil
+}
+
+// ListWireGuardOnlyPeers lists all WireGuard-only peers from cache, optionally filtered by user ID.
+func (s *State) ListWireGuardOnlyPeers(userID *uint) (types.WireGuardOnlyPeers, error) {
+	return s.nodeStore.ListWGPeers(userID), nil
+}
+
+// GetWireGuardOnlyPeerByID retrieves a WireGuard-only peer by its ID.
+func (s *State) GetWireGuardOnlyPeerByID(id uint64) (*types.WireGuardOnlyPeer, error) {
+	peer, found := s.nodeStore.GetWGPeer(types.NodeID(id))
+	if !found {
+		return nil, fmt.Errorf("wireguard-only peer %d not found", id)
+	}
+	return &peer, nil
+}
+
+// DeleteWireGuardOnlyPeer deletes a WireGuard-only peer by ID from database and cache.
+// It returns an error if there are active connections to this peer.
+func (s *State) DeleteWireGuardOnlyPeer(id uint64) (change.Change, error) {
+	// Check if there are any active connections to this peer
+	allConnections := s.nodeStore.ListAllWireGuardConnections()
+	wgPeerID := types.NodeID(id)
+
+	for _, conn := range allConnections {
+		if conn.WGPeerID == wgPeerID {
+			return change.Change{}, fmt.Errorf("cannot delete WireGuard-only peer %d: peer has active connections (found connection from node %d). Remove all connections first", id, conn.NodeID)
+		}
+	}
+
+	err := s.db.DeleteWireGuardOnlyPeer(id)
+	if err != nil {
+		return change.Change{}, err
+	}
+
+	s.nodeStore.DeleteWGPeer(wgPeerID)
+
+	c := change.WireGuardPeerDeleted(wgPeerID)
+	return c, nil
+}
+
+// GetWireGuardConnectionWithPeer atomically retrieves both a connection and its associated peer.
+// This method fetches from a single NodeStore snapshot, eliminating TOCTOU race conditions.
+// This is called in hot paths (HOT PATH) for MapResponse generation.
+func (s *State) GetWireGuardConnectionWithPeer(nodeID, wgPeerID types.NodeID) (*types.WireGuardConnectionWithPeer, bool) {
+	return s.nodeStore.GetWireGuardConnectionWithPeer(nodeID, wgPeerID)
+}
+
+// GetWireGuardConnectionsWithPeersForNode returns all connections with their peers for a node.
+// This method fetches from a single NodeStore snapshot for atomic consistency.
+// This is called for every MapRequest (HOT PATH).
+func (s *State) GetWireGuardConnectionsWithPeersForNode(nodeID types.NodeID) []*types.WireGuardConnectionWithPeer {
+	return s.nodeStore.GetWireGuardConnectionsWithPeersForNode(nodeID)
+}
+
+// CreateWireGuardConnection creates a new connection between a node and a WireGuard-only peer
+// with per-connection masquerade addresses.
+func (s *State) CreateWireGuardConnection(conn *types.WireGuardConnection) (change.Change, error) {
+	if err := conn.Validate(); err != nil {
+		return change.Change{}, fmt.Errorf("validating connection: %w", err)
+	}
+
+	// Verify that both the node and WG peer exist
+	if _, exists := s.nodeStore.GetNode(conn.NodeID); !exists {
+		return change.Change{}, fmt.Errorf("node %d not found", conn.NodeID)
+	}
+
+	if _, exists := s.nodeStore.GetWGPeer(conn.WGPeerID); !exists {
+		return change.Change{}, fmt.Errorf("wireguard peer %d not found", conn.WGPeerID)
+	}
+
+	if err := s.db.CreateWireGuardConnection(conn); err != nil {
+		return change.Change{}, err
+	}
+
+	s.nodeStore.PutConnection(conn)
+
+	c := change.WireGuardConnectionCreated(conn.NodeID, conn.WGPeerID)
+	return c, nil
+}
+
+// DeleteWireGuardConnection removes a connection between a node and a WireGuard-only peer.
+func (s *State) DeleteWireGuardConnection(nodeID, wgPeerID types.NodeID) (change.Change, error) {
+	if err := s.db.DeleteWireGuardConnection(nodeID, wgPeerID); err != nil {
+		return change.Change{}, err
+	}
+
+	s.nodeStore.DeleteConnection(nodeID, wgPeerID)
+
+	c := change.WireGuardConnectionDeleted(nodeID, wgPeerID)
+	return c, nil
+}
+
+// ListAllWireGuardConnections returns all connections in the system.
+// This is for admin/debugging purposes, not for hot paths.
+func (s *State) ListAllWireGuardConnections() []*types.WireGuardConnection {
+	return s.nodeStore.ListAllWireGuardConnections()
 }
 
 // ListEphemeralNodes retrieves all ephemeral (temporary) nodes in the system.

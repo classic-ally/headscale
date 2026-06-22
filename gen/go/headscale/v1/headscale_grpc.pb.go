@@ -19,41 +19,45 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	HeadscaleService_CreateUser_FullMethodName         = "/headscale.v1.HeadscaleService/CreateUser"
-	HeadscaleService_RenameUser_FullMethodName         = "/headscale.v1.HeadscaleService/RenameUser"
-	HeadscaleService_DeleteUser_FullMethodName         = "/headscale.v1.HeadscaleService/DeleteUser"
-	HeadscaleService_ListUsers_FullMethodName          = "/headscale.v1.HeadscaleService/ListUsers"
-	HeadscaleService_CreatePreAuthKey_FullMethodName   = "/headscale.v1.HeadscaleService/CreatePreAuthKey"
-	HeadscaleService_ExpirePreAuthKey_FullMethodName   = "/headscale.v1.HeadscaleService/ExpirePreAuthKey"
-	HeadscaleService_DeletePreAuthKey_FullMethodName   = "/headscale.v1.HeadscaleService/DeletePreAuthKey"
-	HeadscaleService_ListPreAuthKeys_FullMethodName    = "/headscale.v1.HeadscaleService/ListPreAuthKeys"
-	HeadscaleService_DebugCreateNode_FullMethodName    = "/headscale.v1.HeadscaleService/DebugCreateNode"
-	HeadscaleService_GetNode_FullMethodName            = "/headscale.v1.HeadscaleService/GetNode"
-	HeadscaleService_SetTags_FullMethodName            = "/headscale.v1.HeadscaleService/SetTags"
-	HeadscaleService_SetApprovedRoutes_FullMethodName  = "/headscale.v1.HeadscaleService/SetApprovedRoutes"
-	HeadscaleService_RegisterNode_FullMethodName       = "/headscale.v1.HeadscaleService/RegisterNode"
-	HeadscaleService_DeleteNode_FullMethodName         = "/headscale.v1.HeadscaleService/DeleteNode"
-	HeadscaleService_ExpireNode_FullMethodName         = "/headscale.v1.HeadscaleService/ExpireNode"
-	HeadscaleService_RenameNode_FullMethodName         = "/headscale.v1.HeadscaleService/RenameNode"
-	HeadscaleService_ListNodes_FullMethodName          = "/headscale.v1.HeadscaleService/ListNodes"
-	HeadscaleService_BackfillNodeIPs_FullMethodName    = "/headscale.v1.HeadscaleService/BackfillNodeIPs"
-	HeadscaleService_AuthRegister_FullMethodName       = "/headscale.v1.HeadscaleService/AuthRegister"
-	HeadscaleService_AuthApprove_FullMethodName        = "/headscale.v1.HeadscaleService/AuthApprove"
-	HeadscaleService_AuthReject_FullMethodName         = "/headscale.v1.HeadscaleService/AuthReject"
-	HeadscaleService_CreateApiKey_FullMethodName       = "/headscale.v1.HeadscaleService/CreateApiKey"
-	HeadscaleService_ExpireApiKey_FullMethodName       = "/headscale.v1.HeadscaleService/ExpireApiKey"
-	HeadscaleService_ListApiKeys_FullMethodName        = "/headscale.v1.HeadscaleService/ListApiKeys"
-	HeadscaleService_DeleteApiKey_FullMethodName       = "/headscale.v1.HeadscaleService/DeleteApiKey"
-	HeadscaleService_GetPolicy_FullMethodName          = "/headscale.v1.HeadscaleService/GetPolicy"
-	HeadscaleService_SetPolicy_FullMethodName          = "/headscale.v1.HeadscaleService/SetPolicy"
-	HeadscaleService_RegisterDomain_FullMethodName     = "/headscale.v1.HeadscaleService/RegisterDomain"
-	HeadscaleService_VerifyDomain_FullMethodName       = "/headscale.v1.HeadscaleService/VerifyDomain"
-	HeadscaleService_ListDomains_FullMethodName        = "/headscale.v1.HeadscaleService/ListDomains"
-	HeadscaleService_DeleteDomain_FullMethodName       = "/headscale.v1.HeadscaleService/DeleteDomain"
-	HeadscaleService_ReassignDomain_FullMethodName     = "/headscale.v1.HeadscaleService/ReassignDomain"
-	HeadscaleService_SetDomainAccess_FullMethodName    = "/headscale.v1.HeadscaleService/SetDomainAccess"
-	HeadscaleService_DeleteDomainAccess_FullMethodName = "/headscale.v1.HeadscaleService/DeleteDomainAccess"
-	HeadscaleService_Health_FullMethodName             = "/headscale.v1.HeadscaleService/Health"
+	HeadscaleService_CreateUser_FullMethodName                = "/headscale.v1.HeadscaleService/CreateUser"
+	HeadscaleService_RenameUser_FullMethodName                = "/headscale.v1.HeadscaleService/RenameUser"
+	HeadscaleService_DeleteUser_FullMethodName                = "/headscale.v1.HeadscaleService/DeleteUser"
+	HeadscaleService_ListUsers_FullMethodName                 = "/headscale.v1.HeadscaleService/ListUsers"
+	HeadscaleService_CreatePreAuthKey_FullMethodName          = "/headscale.v1.HeadscaleService/CreatePreAuthKey"
+	HeadscaleService_ExpirePreAuthKey_FullMethodName          = "/headscale.v1.HeadscaleService/ExpirePreAuthKey"
+	HeadscaleService_DeletePreAuthKey_FullMethodName          = "/headscale.v1.HeadscaleService/DeletePreAuthKey"
+	HeadscaleService_ListPreAuthKeys_FullMethodName           = "/headscale.v1.HeadscaleService/ListPreAuthKeys"
+	HeadscaleService_DebugCreateNode_FullMethodName           = "/headscale.v1.HeadscaleService/DebugCreateNode"
+	HeadscaleService_GetNode_FullMethodName                   = "/headscale.v1.HeadscaleService/GetNode"
+	HeadscaleService_SetTags_FullMethodName                   = "/headscale.v1.HeadscaleService/SetTags"
+	HeadscaleService_SetApprovedRoutes_FullMethodName         = "/headscale.v1.HeadscaleService/SetApprovedRoutes"
+	HeadscaleService_RegisterNode_FullMethodName              = "/headscale.v1.HeadscaleService/RegisterNode"
+	HeadscaleService_DeleteNode_FullMethodName                = "/headscale.v1.HeadscaleService/DeleteNode"
+	HeadscaleService_ExpireNode_FullMethodName                = "/headscale.v1.HeadscaleService/ExpireNode"
+	HeadscaleService_RenameNode_FullMethodName                = "/headscale.v1.HeadscaleService/RenameNode"
+	HeadscaleService_ListNodes_FullMethodName                 = "/headscale.v1.HeadscaleService/ListNodes"
+	HeadscaleService_BackfillNodeIPs_FullMethodName           = "/headscale.v1.HeadscaleService/BackfillNodeIPs"
+	HeadscaleService_AuthRegister_FullMethodName              = "/headscale.v1.HeadscaleService/AuthRegister"
+	HeadscaleService_AuthApprove_FullMethodName               = "/headscale.v1.HeadscaleService/AuthApprove"
+	HeadscaleService_AuthReject_FullMethodName                = "/headscale.v1.HeadscaleService/AuthReject"
+	HeadscaleService_RegisterWireGuardOnlyPeer_FullMethodName = "/headscale.v1.HeadscaleService/RegisterWireGuardOnlyPeer"
+	HeadscaleService_GetWireGuardOnlyPeer_FullMethodName      = "/headscale.v1.HeadscaleService/GetWireGuardOnlyPeer"
+	HeadscaleService_CreateWireGuardConnection_FullMethodName = "/headscale.v1.HeadscaleService/CreateWireGuardConnection"
+	HeadscaleService_DeleteWireGuardConnection_FullMethodName = "/headscale.v1.HeadscaleService/DeleteWireGuardConnection"
+	HeadscaleService_CreateApiKey_FullMethodName              = "/headscale.v1.HeadscaleService/CreateApiKey"
+	HeadscaleService_ExpireApiKey_FullMethodName              = "/headscale.v1.HeadscaleService/ExpireApiKey"
+	HeadscaleService_ListApiKeys_FullMethodName               = "/headscale.v1.HeadscaleService/ListApiKeys"
+	HeadscaleService_DeleteApiKey_FullMethodName              = "/headscale.v1.HeadscaleService/DeleteApiKey"
+	HeadscaleService_GetPolicy_FullMethodName                 = "/headscale.v1.HeadscaleService/GetPolicy"
+	HeadscaleService_SetPolicy_FullMethodName                 = "/headscale.v1.HeadscaleService/SetPolicy"
+	HeadscaleService_RegisterDomain_FullMethodName            = "/headscale.v1.HeadscaleService/RegisterDomain"
+	HeadscaleService_VerifyDomain_FullMethodName              = "/headscale.v1.HeadscaleService/VerifyDomain"
+	HeadscaleService_ListDomains_FullMethodName               = "/headscale.v1.HeadscaleService/ListDomains"
+	HeadscaleService_DeleteDomain_FullMethodName              = "/headscale.v1.HeadscaleService/DeleteDomain"
+	HeadscaleService_ReassignDomain_FullMethodName            = "/headscale.v1.HeadscaleService/ReassignDomain"
+	HeadscaleService_SetDomainAccess_FullMethodName           = "/headscale.v1.HeadscaleService/SetDomainAccess"
+	HeadscaleService_DeleteDomainAccess_FullMethodName        = "/headscale.v1.HeadscaleService/DeleteDomainAccess"
+	HeadscaleService_Health_FullMethodName                    = "/headscale.v1.HeadscaleService/Health"
 )
 
 // HeadscaleServiceClient is the client API for HeadscaleService service.
@@ -85,6 +89,11 @@ type HeadscaleServiceClient interface {
 	AuthRegister(ctx context.Context, in *AuthRegisterRequest, opts ...grpc.CallOption) (*AuthRegisterResponse, error)
 	AuthApprove(ctx context.Context, in *AuthApproveRequest, opts ...grpc.CallOption) (*AuthApproveResponse, error)
 	AuthReject(ctx context.Context, in *AuthRejectRequest, opts ...grpc.CallOption) (*AuthRejectResponse, error)
+	// --- WireGuard-Only Peers start ---
+	RegisterWireGuardOnlyPeer(ctx context.Context, in *RegisterWireGuardOnlyPeerRequest, opts ...grpc.CallOption) (*RegisterWireGuardOnlyPeerResponse, error)
+	GetWireGuardOnlyPeer(ctx context.Context, in *GetWireGuardOnlyPeerRequest, opts ...grpc.CallOption) (*GetWireGuardOnlyPeerResponse, error)
+	CreateWireGuardConnection(ctx context.Context, in *CreateWireGuardConnectionRequest, opts ...grpc.CallOption) (*CreateWireGuardConnectionResponse, error)
+	DeleteWireGuardConnection(ctx context.Context, in *DeleteWireGuardConnectionRequest, opts ...grpc.CallOption) (*DeleteWireGuardConnectionResponse, error)
 	// --- ApiKeys start ---
 	CreateApiKey(ctx context.Context, in *CreateApiKeyRequest, opts ...grpc.CallOption) (*CreateApiKeyResponse, error)
 	ExpireApiKey(ctx context.Context, in *ExpireApiKeyRequest, opts ...grpc.CallOption) (*ExpireApiKeyResponse, error)
@@ -323,6 +332,46 @@ func (c *headscaleServiceClient) AuthReject(ctx context.Context, in *AuthRejectR
 	return out, nil
 }
 
+func (c *headscaleServiceClient) RegisterWireGuardOnlyPeer(ctx context.Context, in *RegisterWireGuardOnlyPeerRequest, opts ...grpc.CallOption) (*RegisterWireGuardOnlyPeerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RegisterWireGuardOnlyPeerResponse)
+	err := c.cc.Invoke(ctx, HeadscaleService_RegisterWireGuardOnlyPeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *headscaleServiceClient) GetWireGuardOnlyPeer(ctx context.Context, in *GetWireGuardOnlyPeerRequest, opts ...grpc.CallOption) (*GetWireGuardOnlyPeerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetWireGuardOnlyPeerResponse)
+	err := c.cc.Invoke(ctx, HeadscaleService_GetWireGuardOnlyPeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *headscaleServiceClient) CreateWireGuardConnection(ctx context.Context, in *CreateWireGuardConnectionRequest, opts ...grpc.CallOption) (*CreateWireGuardConnectionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateWireGuardConnectionResponse)
+	err := c.cc.Invoke(ctx, HeadscaleService_CreateWireGuardConnection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *headscaleServiceClient) DeleteWireGuardConnection(ctx context.Context, in *DeleteWireGuardConnectionRequest, opts ...grpc.CallOption) (*DeleteWireGuardConnectionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteWireGuardConnectionResponse)
+	err := c.cc.Invoke(ctx, HeadscaleService_DeleteWireGuardConnection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *headscaleServiceClient) CreateApiKey(ctx context.Context, in *CreateApiKeyRequest, opts ...grpc.CallOption) (*CreateApiKeyResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateApiKeyResponse)
@@ -492,6 +541,11 @@ type HeadscaleServiceServer interface {
 	AuthRegister(context.Context, *AuthRegisterRequest) (*AuthRegisterResponse, error)
 	AuthApprove(context.Context, *AuthApproveRequest) (*AuthApproveResponse, error)
 	AuthReject(context.Context, *AuthRejectRequest) (*AuthRejectResponse, error)
+	// --- WireGuard-Only Peers start ---
+	RegisterWireGuardOnlyPeer(context.Context, *RegisterWireGuardOnlyPeerRequest) (*RegisterWireGuardOnlyPeerResponse, error)
+	GetWireGuardOnlyPeer(context.Context, *GetWireGuardOnlyPeerRequest) (*GetWireGuardOnlyPeerResponse, error)
+	CreateWireGuardConnection(context.Context, *CreateWireGuardConnectionRequest) (*CreateWireGuardConnectionResponse, error)
+	DeleteWireGuardConnection(context.Context, *DeleteWireGuardConnectionRequest) (*DeleteWireGuardConnectionResponse, error)
 	// --- ApiKeys start ---
 	CreateApiKey(context.Context, *CreateApiKeyRequest) (*CreateApiKeyResponse, error)
 	ExpireApiKey(context.Context, *ExpireApiKeyRequest) (*ExpireApiKeyResponse, error)
@@ -582,6 +636,18 @@ func (UnimplementedHeadscaleServiceServer) AuthApprove(context.Context, *AuthApp
 }
 func (UnimplementedHeadscaleServiceServer) AuthReject(context.Context, *AuthRejectRequest) (*AuthRejectResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AuthReject not implemented")
+}
+func (UnimplementedHeadscaleServiceServer) RegisterWireGuardOnlyPeer(context.Context, *RegisterWireGuardOnlyPeerRequest) (*RegisterWireGuardOnlyPeerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterWireGuardOnlyPeer not implemented")
+}
+func (UnimplementedHeadscaleServiceServer) GetWireGuardOnlyPeer(context.Context, *GetWireGuardOnlyPeerRequest) (*GetWireGuardOnlyPeerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetWireGuardOnlyPeer not implemented")
+}
+func (UnimplementedHeadscaleServiceServer) CreateWireGuardConnection(context.Context, *CreateWireGuardConnectionRequest) (*CreateWireGuardConnectionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateWireGuardConnection not implemented")
+}
+func (UnimplementedHeadscaleServiceServer) DeleteWireGuardConnection(context.Context, *DeleteWireGuardConnectionRequest) (*DeleteWireGuardConnectionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteWireGuardConnection not implemented")
 }
 func (UnimplementedHeadscaleServiceServer) CreateApiKey(context.Context, *CreateApiKeyRequest) (*CreateApiKeyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateApiKey not implemented")
@@ -1024,6 +1090,78 @@ func _HeadscaleService_AuthReject_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HeadscaleService_RegisterWireGuardOnlyPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterWireGuardOnlyPeerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HeadscaleServiceServer).RegisterWireGuardOnlyPeer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HeadscaleService_RegisterWireGuardOnlyPeer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HeadscaleServiceServer).RegisterWireGuardOnlyPeer(ctx, req.(*RegisterWireGuardOnlyPeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HeadscaleService_GetWireGuardOnlyPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWireGuardOnlyPeerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HeadscaleServiceServer).GetWireGuardOnlyPeer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HeadscaleService_GetWireGuardOnlyPeer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HeadscaleServiceServer).GetWireGuardOnlyPeer(ctx, req.(*GetWireGuardOnlyPeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HeadscaleService_CreateWireGuardConnection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateWireGuardConnectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HeadscaleServiceServer).CreateWireGuardConnection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HeadscaleService_CreateWireGuardConnection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HeadscaleServiceServer).CreateWireGuardConnection(ctx, req.(*CreateWireGuardConnectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HeadscaleService_DeleteWireGuardConnection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteWireGuardConnectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HeadscaleServiceServer).DeleteWireGuardConnection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HeadscaleService_DeleteWireGuardConnection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HeadscaleServiceServer).DeleteWireGuardConnection(ctx, req.(*DeleteWireGuardConnectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _HeadscaleService_CreateApiKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateApiKeyRequest)
 	if err := dec(in); err != nil {
@@ -1366,6 +1504,22 @@ var HeadscaleService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AuthReject",
 			Handler:    _HeadscaleService_AuthReject_Handler,
+		},
+		{
+			MethodName: "RegisterWireGuardOnlyPeer",
+			Handler:    _HeadscaleService_RegisterWireGuardOnlyPeer_Handler,
+		},
+		{
+			MethodName: "GetWireGuardOnlyPeer",
+			Handler:    _HeadscaleService_GetWireGuardOnlyPeer_Handler,
+		},
+		{
+			MethodName: "CreateWireGuardConnection",
+			Handler:    _HeadscaleService_CreateWireGuardConnection_Handler,
+		},
+		{
+			MethodName: "DeleteWireGuardConnection",
+			Handler:    _HeadscaleService_DeleteWireGuardConnection_Handler,
 		},
 		{
 			MethodName: "CreateApiKey",
