@@ -2,10 +2,14 @@ package hscontrol
 
 import (
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/juanfont/headscale/hscontrol/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"tailscale.com/tailcfg"
 	tsptr "tailscale.com/types/ptr"
 )
@@ -212,4 +216,144 @@ func TestGenerateFunnelRoutes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGenerateFunnelRoutes_IPv6Only(t *testing.T) {
+	cfg := &types.Config{BaseDomain: "icefox.xyz"}
+	nodes := types.Nodes{
+		{
+			GivenName: "v6box",
+			Hostname:  "v6box",
+			UserID:    new(uint(1)),
+			User:      &types.User{Name: "alice"},
+			IPv6:      new(netip.MustParseAddr("fd7a:115c:a1e0::1")),
+			Hostinfo:  &tailcfg.Hostinfo{IngressEnabled: true},
+		},
+	}
+
+	got := string(GenerateFunnelRoutes(cfg, nodes, nil))
+
+	want := "v6box.icefox.xyz  [fd7a:115c:a1e0::1]:443;  # v6box"
+	if !strings.Contains(got, want) {
+		t.Errorf("output missing %q\ngot:\n%s", want, got)
+	}
+}
+
+func TestGenerateFunnelRoutes_DomainLookup(t *testing.T) {
+	// domainLookup is only consulted when TailcfgDNSConfig is non-nil.
+	cfg := &types.Config{
+		BaseDomain:       "icefox.xyz",
+		TailcfgDNSConfig: &tailcfg.DNSConfig{},
+	}
+	nodes := types.Nodes{
+		{
+			ID:        types.NodeID(42),
+			GivenName: "desktop",
+			Hostname:  "desktop",
+			UserID:    new(uint(1)),
+			User:      &types.User{Name: "alice"},
+			IPv4:      new(netip.MustParseAddr("100.64.0.6")),
+			Hostinfo:  &tailcfg.Hostinfo{IngressEnabled: true},
+		},
+	}
+	lookup := func(id types.NodeID) []string {
+		if id == types.NodeID(42) {
+			return []string{"db-domain.bentley.sh"}
+		}
+
+		return nil
+	}
+
+	got := string(GenerateFunnelRoutes(cfg, nodes, lookup))
+	for _, want := range []string{
+		"desktop.icefox.xyz  100.64.0.6:443;  # desktop",
+		"db-domain.bentley.sh  100.64.0.6:443;  # desktop",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q\ngot:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFunnelRoutesFromViews exercises the runtime NodeView path that
+// UpdateRoutes uses, covering the funnel branch, IPv6 bracketing, and skipping
+// of non-funnel nodes.
+func TestGenerateFunnelRoutesFromViews(t *testing.T) {
+	cfg := &types.Config{BaseDomain: "icefox.xyz"}
+	nodes := types.Nodes{
+		{
+			GivenName: "desktop",
+			Hostname:  "desktop",
+			UserID:    new(uint(1)),
+			User:      &types.User{Name: "alice"},
+			IPv4:      new(netip.MustParseAddr("100.64.0.6")),
+			Hostinfo:  &tailcfg.Hostinfo{IngressEnabled: true},
+		},
+		{
+			GivenName: "v6box",
+			Hostname:  "v6box",
+			UserID:    new(uint(1)),
+			User:      &types.User{Name: "alice"},
+			IPv6:      new(netip.MustParseAddr("fd7a:115c:a1e0::1")),
+			Hostinfo:  &tailcfg.Hostinfo{IngressEnabled: true},
+		},
+		{
+			GivenName: "laptop",
+			Hostname:  "laptop",
+			UserID:    new(uint(1)),
+			User:      &types.User{Name: "alice"},
+			IPv4:      new(netip.MustParseAddr("100.64.0.7")),
+			Hostinfo:  &tailcfg.Hostinfo{IngressEnabled: false},
+		},
+	}
+
+	got := string(generateFunnelRoutesFromViews(cfg, nodes.ViewSlice(), nil))
+	for _, want := range []string{
+		"desktop.icefox.xyz  100.64.0.6:443;  # desktop",
+		"v6box.icefox.xyz  [fd7a:115c:a1e0::1]:443;  # v6box",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q\ngot:\n%s", want, got)
+		}
+	}
+
+	if strings.Contains(got, "laptop") {
+		t.Errorf("non-funnel node should be absent\ngot:\n%s", got)
+	}
+}
+
+// TestUpdateRoutes covers the file-write mechanics: header, 0644 perms, and
+// idempotency (unchanged state must not rewrite the file).
+func TestUpdateRoutes(t *testing.T) {
+	app := createTestApp(t)
+
+	routesFile := filepath.Join(t.TempDir(), "funnel-routes.conf")
+	cfg := *app.cfg
+	cfg.FunnelRoutesFile = routesFile
+
+	fm := NewFunnelManager(app.state, &cfg)
+
+	require.NoError(t, fm.UpdateRoutes())
+
+	info, err := os.Stat(routesFile)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
+
+	content, err := os.ReadFile(routesFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "Auto-generated funnel routes")
+
+	// Unchanged state on a second call must be a no-op (lastHash guard).
+	before, err := os.Stat(routesFile)
+	require.NoError(t, err)
+	require.NoError(t, fm.UpdateRoutes())
+
+	after, err := os.Stat(routesFile)
+	require.NoError(t, err)
+	assert.Equal(
+		t,
+		before.ModTime(),
+		after.ModTime(),
+		"unchanged routes must not rewrite the file",
+	)
 }
