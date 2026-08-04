@@ -46,6 +46,7 @@ const (
 	HeadscaleService_DeleteApiKey_FullMethodName       = "/headscale.v1.HeadscaleService/DeleteApiKey"
 	HeadscaleService_GetPolicy_FullMethodName          = "/headscale.v1.HeadscaleService/GetPolicy"
 	HeadscaleService_SetPolicy_FullMethodName          = "/headscale.v1.HeadscaleService/SetPolicy"
+	HeadscaleService_CheckPolicy_FullMethodName        = "/headscale.v1.HeadscaleService/CheckPolicy"
 	HeadscaleService_RegisterDomain_FullMethodName     = "/headscale.v1.HeadscaleService/RegisterDomain"
 	HeadscaleService_VerifyDomain_FullMethodName       = "/headscale.v1.HeadscaleService/VerifyDomain"
 	HeadscaleService_ListDomains_FullMethodName        = "/headscale.v1.HeadscaleService/ListDomains"
@@ -93,6 +94,7 @@ type HeadscaleServiceClient interface {
 	// --- Policy start ---
 	GetPolicy(ctx context.Context, in *GetPolicyRequest, opts ...grpc.CallOption) (*GetPolicyResponse, error)
 	SetPolicy(ctx context.Context, in *SetPolicyRequest, opts ...grpc.CallOption) (*SetPolicyResponse, error)
+	CheckPolicy(ctx context.Context, in *CheckPolicyRequest, opts ...grpc.CallOption) (*CheckPolicyResponse, error)
 	// --- Domain start ---
 	RegisterDomain(ctx context.Context, in *RegisterDomainRequest, opts ...grpc.CallOption) (*RegisterDomainResponse, error)
 	VerifyDomain(ctx context.Context, in *VerifyDomainRequest, opts ...grpc.CallOption) (*VerifyDomainResponse, error)
@@ -383,6 +385,16 @@ func (c *headscaleServiceClient) SetPolicy(ctx context.Context, in *SetPolicyReq
 	return out, nil
 }
 
+func (c *headscaleServiceClient) CheckPolicy(ctx context.Context, in *CheckPolicyRequest, opts ...grpc.CallOption) (*CheckPolicyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CheckPolicyResponse)
+	err := c.cc.Invoke(ctx, HeadscaleService_CheckPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *headscaleServiceClient) RegisterDomain(ctx context.Context, in *RegisterDomainRequest, opts ...grpc.CallOption) (*RegisterDomainResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegisterDomainResponse)
@@ -500,6 +512,7 @@ type HeadscaleServiceServer interface {
 	// --- Policy start ---
 	GetPolicy(context.Context, *GetPolicyRequest) (*GetPolicyResponse, error)
 	SetPolicy(context.Context, *SetPolicyRequest) (*SetPolicyResponse, error)
+	CheckPolicy(context.Context, *CheckPolicyRequest) (*CheckPolicyResponse, error)
 	// --- Domain start ---
 	RegisterDomain(context.Context, *RegisterDomainRequest) (*RegisterDomainResponse, error)
 	VerifyDomain(context.Context, *VerifyDomainRequest) (*VerifyDomainResponse, error)
@@ -600,6 +613,9 @@ func (UnimplementedHeadscaleServiceServer) GetPolicy(context.Context, *GetPolicy
 }
 func (UnimplementedHeadscaleServiceServer) SetPolicy(context.Context, *SetPolicyRequest) (*SetPolicyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetPolicy not implemented")
+}
+func (UnimplementedHeadscaleServiceServer) CheckPolicy(context.Context, *CheckPolicyRequest) (*CheckPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CheckPolicy not implemented")
 }
 func (UnimplementedHeadscaleServiceServer) RegisterDomain(context.Context, *RegisterDomainRequest) (*RegisterDomainResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterDomain not implemented")
@@ -1132,6 +1148,24 @@ func _HeadscaleService_SetPolicy_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HeadscaleService_CheckPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HeadscaleServiceServer).CheckPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HeadscaleService_CheckPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HeadscaleServiceServer).CheckPolicy(ctx, req.(*CheckPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _HeadscaleService_RegisterDomain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RegisterDomainRequest)
 	if err := dec(in); err != nil {
@@ -1390,6 +1424,10 @@ var HeadscaleService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetPolicy",
 			Handler:    _HeadscaleService_SetPolicy_Handler,
+		},
+		{
+			MethodName: "CheckPolicy",
+			Handler:    _HeadscaleService_CheckPolicy_Handler,
 		},
 		{
 			MethodName: "RegisterDomain",

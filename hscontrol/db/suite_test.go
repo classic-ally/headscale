@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/juanfont/headscale/hscontrol/types"
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 	"zombiezen.com/go/postgrestest"
 )
@@ -43,7 +42,6 @@ func newSQLiteTestDB() (*HSDatabase, error) {
 	}
 
 	log.Printf("database path: %s", tmpDir+"/headscale_test.db")
-	zerolog.SetGlobalLevel(zerolog.Disabled)
 
 	db, err := NewHeadscaleDatabase(
 		&types.Config{
@@ -57,7 +55,6 @@ func newSQLiteTestDB() (*HSDatabase, error) {
 				Mode: types.PolicyModeDB,
 			},
 		},
-		emptyCache(),
 	)
 	if err != nil {
 		return nil, err
@@ -118,7 +115,6 @@ func newHeadscaleDBFromPostgresURL(t *testing.T, pu *url.URL) *HSDatabase {
 				Mode: types.PolicyModeDB,
 			},
 		},
-		emptyCache(),
 	)
 	if err != nil {
 		t.Fatal(err)

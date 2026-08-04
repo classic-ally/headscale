@@ -96,17 +96,11 @@ func (m *mapSession) stopFromBatcher() {
 	}
 }
 
-func (m *mapSession) beforeServeLongPoll() {
-	if m.node.IsEphemeral() {
-		m.h.ephemeralGC.Cancel(m.node.ID)
-	}
-}
-
 // afterServeLongPoll is called when a long-polling session ends and the node
 // is disconnected.
 func (m *mapSession) afterServeLongPoll() {
 	if m.node.IsEphemeral() {
-		m.h.ephemeralGC.Schedule(m.node.ID, m.h.cfg.EphemeralNodeInactivityTimeout)
+		m.h.ephemeralGC.Schedule(m.node.ID, m.h.cfg.Node.Ephemeral.InactivityTimeout)
 	}
 }
 
@@ -115,7 +109,7 @@ func (m *mapSession) serve() {
 	// This is the mechanism where the node gives us information about its
 	// current configuration.
 	//
-	// Process the MapRequest to update node state (endpoints, hostinfo, etc.)
+	// Process the [tailcfg.MapRequest] to update node state (endpoints, hostinfo, etc.)
 	c, err := m.h.state.UpdateNodeFromMapRequest(m.node.ID, m.req)
 	if err != nil {
 		httpError(m.w, err)
@@ -152,14 +146,12 @@ func (m *mapSession) serve() {
 //
 //nolint:gocyclo
 func (m *mapSession) serveLongPoll() {
-	m.beforeServeLongPoll()
-
 	m.log.Trace().Caller().Msg("long poll session started")
 
-	// connectGen is set by Connect() below and captured by the deferred cleanup closure.
-	// It allows Disconnect() to reject stale calls from old sessions — if a newer session
-	// has called Connect() (incrementing the generation), the old session's Disconnect()
-	// sees a mismatched generation and becomes a no-op.
+	// connectGen is set by [state.State.Connect] below and captured by the deferred cleanup closure.
+	// Each Connect acquires one live session in state; the cleanup must release
+	// it with exactly one [state.State.Disconnect] call, in every exit path, or
+	// the node's session count leaks and it stays online forever.
 	var connectGen uint64
 
 	// Clean up the session when the client disconnects
@@ -168,49 +160,55 @@ func (m *mapSession) serveLongPoll() {
 
 		stillConnected := m.h.mapBatcher.RemoveNode(m.node.ID, m.ch)
 
-		// If another session already exists for this node (reconnect
-		// happened before this cleanup ran), skip the grace period
-		// entirely — the node is not actually disconnecting.
-		if stillConnected {
+		// This session never reached [state.State.Connect]; there is no
+		// session to release.
+		if connectGen == 0 {
 			return
 		}
 
 		// When a node disconnects, it might rapidly reconnect (e.g. mobile clients, network weather).
 		// Instead of immediately marking the node as offline, we wait a few seconds to see if it reconnects.
-		// If it does reconnect, the existing mapSession will be replaced and the node remains online.
-		// If it doesn't reconnect within the timeout, we mark it as offline.
+		// If it reconnects during the wait, the new session's Connect raises the
+		// session count, so the release below keeps the node online.
 		//
 		// This avoids flapping nodes in the UI and unnecessary churn in the network.
 		// This is not my favourite solution, but it kind of works in our eventually consistent world.
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
+		//
+		// When another session already replaced this one (stillConnected), skip
+		// the wait — but never the release itself. A cancelled map request whose
+		// handler ran late is exactly such a session: if it kept its session
+		// acquired on this path, the surviving session's release could never
+		// take the node offline (the relogin flake).
+		if !stillConnected {
+			// Wait up to 10 seconds for the node to reconnect.
+			// 10 seconds was arbitrary chosen as a reasonable time to reconnect.
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
 
-		disconnected := true
-		// Wait up to 10 seconds for the node to reconnect.
-		// 10 seconds was arbitrary chosen as a reasonable time to reconnect.
-		for range 10 {
-			if m.h.mapBatcher.IsConnected(m.node.ID) {
-				disconnected = false
-				break
+			for range 10 {
+				if m.h.mapBatcher.IsConnected(m.node.ID) {
+					break
+				}
+
+				<-ticker.C
 			}
-
-			<-ticker.C
 		}
 
-		if disconnected {
-			// Pass the generation from our Connect() call. If a newer session has
-			// connected since (bumping the generation), Disconnect() will detect
-			// the mismatch and skip the state update, preventing the race where
-			// an old grace period goroutine overwrites a newer session's online status.
-			disconnectChanges, err := m.h.state.Disconnect(m.node.ID, connectGen)
-			if err != nil {
-				m.log.Error().Caller().Err(err).Msg("failed to disconnect node")
-			}
-
-			m.h.Change(disconnectChanges...)
-			m.afterServeLongPoll()
-			m.log.Info().Caller().Str(zf.Chan, fmt.Sprintf("%p", m.ch)).Msg("node has disconnected")
+		// Release this session. The node goes offline exactly when the last
+		// live session is released, so releases from replaced or stale
+		// sessions are harmless regardless of the order they run in.
+		disconnectChanges, err := m.h.state.Disconnect(m.node.ID, connectGen)
+		if err != nil {
+			m.log.Error().Caller().Err(err).Msg("failed to disconnect node")
 		}
+
+		if len(disconnectChanges) == 0 {
+			return
+		}
+
+		m.h.Change(disconnectChanges...)
+		m.afterServeLongPoll()
+		m.log.Info().Caller().Str(zf.Chan, fmt.Sprintf("%p", m.ch)).Msg("node has disconnected")
 	}()
 
 	// Set up the client stream
@@ -222,28 +220,40 @@ func (m *mapSession) serveLongPoll() {
 
 	m.keepAliveTicker = time.NewTicker(m.keepAlive)
 
-	// Process the initial MapRequest to update node state (endpoints, hostinfo, etc.)
-	// This must be done BEFORE calling Connect() to ensure routes are properly synchronized.
-	// When nodes reconnect, they send their hostinfo with announced routes in the MapRequest.
-	// We need this data in NodeStore before Connect() sets up the primary routes, because
-	// SubnetRoutes() calculates the intersection of announced and approved routes. If we
-	// call Connect() first, SubnetRoutes() returns empty (no announced routes yet), causing
+	// Process the initial [tailcfg.MapRequest] to update node state (endpoints, hostinfo, etc.)
+	// This must be done BEFORE calling [state.State.Connect] to ensure routes are properly synchronized.
+	// When nodes reconnect, they send their hostinfo with announced routes in the [tailcfg.MapRequest].
+	// We need this data in [state.NodeStore] before [state.State.Connect] sets up the primary routes, because
+	// [types.NodeView.SubnetRoutes] calculates the intersection of announced and approved routes. If we
+	// call [state.State.Connect] first, [types.NodeView.SubnetRoutes] returns empty (no announced routes yet), causing
 	// the node to be incorrectly removed from AvailableRoutes.
 	mapReqChange, err := m.h.state.UpdateNodeFromMapRequest(m.node.ID, m.req)
 	if err != nil {
 		m.log.Error().Caller().Err(err).Msg("failed to update node from initial MapRequest")
+		// Write an explicit error rather than returning silently: a bare
+		// return leaves net/http to send an empty 200, which the client
+		// reads as "unexpected EOF" and retries forever (issue #3346).
+		httpError(m.w, err)
+
 		return
 	}
 
 	// Connect the node after its state has been updated.
 	// We send two separate change notifications because these are distinct operations:
-	// 1. UpdateNodeFromMapRequest: processes the client's reported state (routes, endpoints, hostinfo)
-	// 2. Connect: marks the node online and recalculates primary routes based on the updated state
+	// 1. [state.State.UpdateNodeFromMapRequest]: processes the client's reported state (routes, endpoints, hostinfo)
+	// 2. [state.State.Connect]: marks the node online and recalculates primary routes based on the updated state
 	// While this results in two notifications, it ensures route data is synchronized before
 	// primary route selection occurs, which is critical for proper HA subnet router failover.
 	var connectChanges []change.Change
 
 	connectChanges, connectGen = m.h.state.Connect(m.node.ID)
+
+	// Cancel ephemeral GC only after Connect succeeds. Cancelling at the start
+	// of serveLongPoll left departed nodes without a deletion timer when a
+	// reconnect attempt failed before Connect (issue #3382).
+	if m.node.IsEphemeral() {
+		m.h.ephemeralGC.Cancel(m.node.ID)
+	}
 
 	m.log.Info().Caller().Str(zf.Chan, fmt.Sprintf("%p", m.ch)).Msg("node has connected")
 
@@ -254,6 +264,11 @@ func (m *mapSession) serveLongPoll() {
 	// time between the node connecting and the batcher being ready.
 	if err := m.h.mapBatcher.AddNode(m.node.ID, m.ch, m.capVer, m.stopFromBatcher); err != nil { //nolint:noinlineerr
 		m.log.Error().Caller().Err(err).Msg("failed to add node to batcher")
+		// Write an explicit error rather than returning silently: a bare
+		// return leaves net/http to send an empty 200, which the client
+		// reads as "unexpected EOF" and retries forever (issue #3346).
+		httpError(m.w, err)
+
 		return
 	}
 
@@ -316,8 +331,8 @@ func (m *mapSession) serveLongPoll() {
 
 // writeMap writes the map response to the client.
 // It handles compression if requested and any headers that need to be set.
-// It also handles flushing the response if the ResponseWriter
-// implements http.Flusher.
+// It also handles flushing the response if the [http.ResponseWriter]
+// implements [http.Flusher].
 func (m *mapSession) writeMap(msg *tailcfg.MapResponse) error {
 	jsonBody, err := json.Marshal(msg)
 	if err != nil {

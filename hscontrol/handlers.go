@@ -19,17 +19,6 @@ import (
 )
 
 const (
-	// NoiseCapabilityVersion is used by Tailscale clients to indicate
-	// their codebase version. Tailscale clients can communicate over TS2021
-	// from CapabilityVersion 28, but we only have good support for it
-	// since https://github.com/tailscale/tailscale/pull/4323 (Noise in any HTTPS port).
-	//
-	// Related to this change, there is https://github.com/tailscale/tailscale/pull/5379,
-	// where CapabilityVersion 39 is introduced to indicate #4323 was merged.
-	//
-	// See also https://github.com/tailscale/tailscale/blob/main/tailcfg/tailcfg.go
-	NoiseCapabilityVersion = 39
-
 	reservedResponseHeaderSize = 4
 )
 
@@ -41,6 +30,54 @@ func httpError(w http.ResponseWriter, err error) {
 	} else {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		log.Error().Err(err).Int("code", http.StatusInternalServerError).Msg("http internal server error")
+	}
+}
+
+// httpUserError logs an error and sends a styled HTML error page.
+// Use this for browser-facing error paths (OIDC, registration confirm)
+// where the user should see a branded page instead of plain text.
+// Technical details go to the server log; the HTML page only shows
+// an actionable message derived from the HTTP status code.
+func httpUserError(w http.ResponseWriter, err error) {
+	code := http.StatusInternalServerError
+
+	if herr, ok := errors.AsType[HTTPError](err); ok {
+		if herr.Code != 0 {
+			code = herr.Code
+		}
+
+		log.Error().Err(herr.Err).Int("code", code).Msgf("user msg: %s", herr.Msg)
+	} else {
+		log.Error().Err(err).Int("code", code).Msg("http internal server error")
+	}
+
+	userMsg := userMessageForStatusCode(code)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+
+	page := templates.AuthError(templates.AuthErrorResult{
+		Title:   "Headscale - Error",
+		Heading: http.StatusText(code),
+		Message: userMsg,
+	})
+
+	_, werr := w.Write([]byte(page.Render()))
+	if werr != nil {
+		log.Error().Err(werr).Msg("failed to write HTML error response")
+	}
+}
+
+func userMessageForStatusCode(code int) string {
+	switch {
+	case code == http.StatusUnauthorized || code == http.StatusForbidden:
+		return "You are not authorized. Please contact your administrator."
+	case code == http.StatusGone:
+		return "Your session has expired. Please try again."
+	case code >= 400 && code < 500:
+		return "The request could not be processed. Please try again."
+	default:
+		return "Something went wrong. Please try again later."
 	}
 }
 
@@ -80,13 +117,19 @@ func parseCapabilityVersion(req *http.Request) (tailcfg.CapabilityVersion, error
 	return tailcfg.CapabilityVersion(clientCapabilityVersion), nil
 }
 
+// verifyBodyLimit caps the request body for /verify. The DERP verify
+// protocol payload ([tailcfg.DERPAdmitClientRequest]) is a few hundred
+// bytes; 4 KiB is generous and prevents an unauthenticated client from
+// OOMing the public router with arbitrarily large POSTs.
+const verifyBodyLimit int64 = 4 * 1024
+
 func (h *Headscale) handleVerifyRequest(
 	req *http.Request,
 	writer io.Writer,
 ) error {
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
-		return fmt.Errorf("reading request body: %w", err)
+		return NewHTTPError(http.StatusRequestEntityTooLarge, "request body too large", fmt.Errorf("reading request body: %w", err))
 	}
 
 	var derpAdmitClientRequest tailcfg.DERPAdmitClientRequest
@@ -124,6 +167,8 @@ func (h *Headscale) VerifyHandler(
 		return
 	}
 
+	req.Body = http.MaxBytesReader(writer, req.Body, verifyBodyLimit)
+
 	err := h.handleVerifyRequest(req, writer)
 	if err != nil {
 		httpError(writer, err)
@@ -146,20 +191,27 @@ func (h *Headscale) KeyHandler(
 		return
 	}
 
-	// TS2021 (Tailscale v2 protocol) requires to have a different key
-	if capVer >= NoiseCapabilityVersion {
-		resp := tailcfg.OverTLSPublicKeyResponse{
-			PublicKey: h.noisePrivateKey.Public(),
-		}
-
-		writer.Header().Set("Content-Type", "application/json")
-
-		err := json.NewEncoder(writer).Encode(resp)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to encode public key response")
-		}
-
+	// Only disclose the Noise public key to clients this server can
+	// actually complete a handshake with. Gating on the same floor the
+	// Noise handshake enforces (capver.MinSupportedCapabilityVersion, see
+	// isSupportedVersion in noise.go) keeps /key consistent with /ts2021:
+	// versions the handshake would reject get a clear rejection here
+	// instead of a key that only serves as a version-boundary oracle.
+	// See https://github.com/juanfont/headscale/issues/3380.
+	if !isSupportedVersion(capVer) {
+		httpError(writer, NewHTTPError(http.StatusBadRequest, "unsupported client version", unsupportedClientError(capVer)))
 		return
+	}
+
+	resp := tailcfg.OverTLSPublicKeyResponse{
+		PublicKey: h.noisePrivateKey.Public(),
+	}
+
+	writer.Header().Set("Content-Type", "application/json")
+
+	err = json.NewEncoder(writer).Encode(resp)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to encode public key response")
 	}
 }
 
@@ -302,7 +354,7 @@ func authIDFromRequest(req *http.Request) (types.AuthID, error) {
 // Listens in /register/:registration_id.
 //
 // This is not part of the Tailscale control API, as we could send whatever URL
-// in the RegisterResponse.AuthURL field.
+// in the [tailcfg.RegisterResponse.AuthURL] field.
 func (a *AuthProviderWeb) RegisterHandler(
 	writer http.ResponseWriter,
 	req *http.Request,

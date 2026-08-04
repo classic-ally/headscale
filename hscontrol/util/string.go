@@ -32,9 +32,18 @@ func GenerateRandomBytes(n int) ([]byte, error) {
 func GenerateRandomStringURLSafe(n int) (string, error) {
 	b, err := GenerateRandomBytes(n)
 
-	uenc := base64.RawURLEncoding.EncodeToString(b)
+	return encodeRandomURLSafe(b, n, err)
+}
 
-	return uenc[:n], err
+// encodeRandomURLSafe URL-safe base64-encodes b and truncates to n. It checks
+// err first: on an RNG failure b is nil, so slicing the empty encoding would
+// panic instead of returning the ("", err) the caller is promised.
+func encodeRandomURLSafe(b []byte, n int, err error) (string, error) {
+	if err != nil {
+		return "", err
+	}
+
+	return base64.RawURLEncoding.EncodeToString(b)[:n], nil
 }
 
 // GenerateRandomStringDNSSafe returns a DNS-safe
@@ -71,11 +80,6 @@ func MustGenerateRandomStringDNSSafe(size int) string {
 	return hash
 }
 
-func InvalidString() string {
-	hash, _ := GenerateRandomStringDNSSafe(8)
-	return "invalid-" + hash
-}
-
 func TailNodesToString(nodes []*tailcfg.Node) string {
 	temp := make([]string, len(nodes))
 
@@ -98,12 +102,12 @@ func TailcfgFilterRulesToString(rules []tailcfg.FilterRule) string {
 	var sb strings.Builder
 
 	for index, rule := range rules {
-		sb.WriteString(fmt.Sprintf(`
+		fmt.Fprintf(&sb, `
 {
   SrcIPs: %v
   DstIPs: %v
 }
-`, rule.SrcIPs, rule.DstPorts))
+`, rule.SrcIPs, rule.DstPorts)
 
 		if index < len(rules)-1 {
 			sb.WriteString(", ")

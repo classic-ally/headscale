@@ -24,7 +24,6 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 	"gorm.io/gorm/schema"
-	"zgo.at/zcache/v2"
 )
 
 //go:embed schema.sql
@@ -45,19 +44,15 @@ const (
 )
 
 type HSDatabase struct {
-	DB       *gorm.DB
-	cfg      *types.Config
-	regCache *zcache.Cache[types.AuthID, types.AuthRequest]
+	DB  *gorm.DB
+	cfg *types.Config
 }
 
 // NewHeadscaleDatabase creates a new database connection and runs migrations.
 // It accepts the full configuration to allow migrations access to policy settings.
 //
 //nolint:gocyclo // complex database initialization with many migrations
-func NewHeadscaleDatabase(
-	cfg *types.Config,
-	regCache *zcache.Cache[types.AuthID, types.AuthRequest],
-) (*HSDatabase, error) {
+func NewHeadscaleDatabase(cfg *types.Config) (*HSDatabase, error) {
 	dbConn, err := openDB(cfg.Database)
 	if err != nil {
 		return nil, err
@@ -677,7 +672,7 @@ AND auth_key_id NOT IN (
 							continue
 						}
 
-						mergedTags := append(existingTags, validatedTags...)
+						mergedTags := append(slices.Clone(existingTags), validatedTags...)
 						slices.Sort(mergedTags)
 						mergedTags = slices.Compact(mergedTags)
 
@@ -711,13 +706,20 @@ AND auth_key_id NOT IN (
 				// but this prevents deleting users whose nodes have been
 				// tagged, and the ON DELETE CASCADE FK would destroy the
 				// tagged nodes if the user were deleted.
+				//
+				// A nil tags slice marshals to the JSON literal 'null', so
+				// untagged nodes can carry tags='null'. That spelling must be
+				// excluded alongside '[]' and '' or untagged nodes lose their
+				// user. Nodes already detached by the earlier version of this
+				// migration are repaired by the recovery migration below.
 				// Fixes: https://github.com/juanfont/headscale/issues/3077
+				// Fixes: https://github.com/juanfont/headscale/issues/3323
 				ID: "202602201200-clear-tagged-node-user-id",
 				Migrate: func(tx *gorm.DB) error {
 					err := tx.Exec(`
 UPDATE nodes
 SET user_id = NULL
-WHERE tags IS NOT NULL AND tags != '[]' AND tags != '';
+WHERE tags IS NOT NULL AND tags != '[]' AND tags != '' AND tags != 'null';
 						`).Error
 					if err != nil {
 						return fmt.Errorf("clearing user_id on tagged nodes: %w", err)
@@ -736,6 +738,85 @@ WHERE tags IS NOT NULL AND tags != '[]' AND tags != '';
 					}
 
 					return createDomainIndexes(tx)
+				},
+				Rollback: func(db *gorm.DB) error { return nil },
+			},
+			{
+				// Clear zero-time node expiry values to NULL.
+				// Versions before 0.28 persisted a pointer to a zero
+				// time.Time as '0001-01-01 00:00:00+00:00' rather than
+				// NULL, which 0.29 reports as an expired node. This
+				// normalises the existing rows so the column once
+				// again means "no expiry" when unset.
+				ID: "202605221435-clear-zero-time-node-expiry",
+				Migrate: func(tx *gorm.DB) error {
+					err := tx.Exec(`
+UPDATE nodes
+SET expiry = NULL
+WHERE expiry IS NOT NULL AND expiry < '1900-01-01';
+						`).Error
+					if err != nil {
+						return fmt.Errorf("clearing zero-time node expiry: %w", err)
+					}
+
+					return nil
+				},
+				Rollback: func(db *gorm.DB) error { return nil },
+			},
+			{
+				// Recover user_id on untagged nodes detached by the earlier
+				// version of 202602201200-clear-tagged-node-user-id, which
+				// treated tags='null' as tagged and cleared the user. This
+				// repairs databases that already upgraded to 0.29.0; fresh
+				// upgrades are protected by the fixed migration above and find
+				// nothing to repair. Recovery is best-effort: the owner is
+				// re-derived from the node's pre-auth key, so nodes registered
+				// via CLI/OIDC (no pre-auth key) cannot be recovered and must
+				// be reassigned manually.
+				// Fixes: https://github.com/juanfont/headscale/issues/3323
+				ID: "202606181200-recover-null-tags-node-user-id",
+				Migrate: func(tx *gorm.DB) error {
+					err := tx.Exec(`
+UPDATE nodes
+SET user_id = (
+	SELECT pak.user_id FROM pre_auth_keys pak WHERE pak.id = nodes.auth_key_id
+)
+WHERE user_id IS NULL
+	AND auth_key_id IS NOT NULL
+	AND (tags IS NULL OR tags = '' OR tags = '[]' OR tags = 'null');
+						`).Error
+					if err != nil {
+						return fmt.Errorf("recovering user_id on untagged nodes: %w", err)
+					}
+
+					return nil
+				},
+				Rollback: func(db *gorm.DB) error { return nil },
+			},
+			{
+				// Clear stale key expiry on tagged nodes. A tagged node is
+				// owned by its tags and never expires (KB 1068), but a buggy
+				// handleLogout stamped a past expiry on it, leaving it
+				// permanently Expired and unable to re-authenticate. The
+				// buggy writer is fixed, so this only repairs rows written
+				// before the upgrade; a fixed server cannot recreate them.
+				// Match the tagged-node predicate the earlier
+				// clear-tagged-node-user-id migration uses (a nil tags slice
+				// marshals to 'null', so exclude it).
+				// Fixes: https://github.com/juanfont/headscale/issues/3371
+				ID: "202607241200-clear-tagged-node-expiry",
+				Migrate: func(tx *gorm.DB) error {
+					err := tx.Exec(`
+UPDATE nodes
+SET expiry = NULL
+WHERE tags IS NOT NULL AND tags != '[]' AND tags != '' AND tags != 'null'
+	AND expiry IS NOT NULL;
+						`).Error
+					if err != nil {
+						return fmt.Errorf("clearing expiry on tagged nodes: %w", err)
+					}
+
+					return nil
 				},
 				Rollback: func(db *gorm.DB) error { return nil },
 			},
@@ -861,9 +942,8 @@ WHERE tags IS NOT NULL AND tags != '[]' AND tags != '';
 	}
 
 	db := HSDatabase{
-		DB:       dbConn,
-		cfg:      cfg,
-		regCache: regCache,
+		DB:  dbConn,
+		cfg: cfg,
 	}
 
 	return &db, err

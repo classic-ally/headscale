@@ -1,6 +1,7 @@
 package mapper
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -16,6 +17,22 @@ import (
 	"tailscale.com/tailcfg"
 )
 
+// errNoActiveConnections is returned by [multiChannelNodeConn.send] when a node
+// has no active connections (disconnected but kept in the batcher for rapid
+// reconnection). Callers must not update peer tracking state (lastSentPeers)
+// after this error because the data was never delivered to any client.
+var errNoActiveConnections = errors.New("no active connections")
+
+// errNoReadyConnections is returned by [multiChannelNodeConn.send] when the
+// node's only connections are still waiting for their initial map
+// ([Batcher.AddNode] has registered them but not yet delivered the first full
+// response). Sending a delta now would make it the stream's first frame, which
+// Tailscale clients reject ("initial MapResponse lacked Node") — tearing down
+// the poll. Unlike [errNoActiveConnections], the change must be retried: the
+// in-flight initial map may have been generated from a snapshot older than
+// the change, so dropping it would lose the update.
+var errNoReadyConnections = errors.New("no connections ready for updates")
+
 // connectionEntry represents a single connection to a node.
 type connectionEntry struct {
 	id       string // unique connection ID
@@ -25,6 +42,13 @@ type connectionEntry struct {
 	stop     func()
 	lastUsed atomic.Int64 // Unix timestamp of last successful send
 	closed   atomic.Bool  // Indicates if this connection has been closed
+
+	// pendingInitial is set by [Batcher.AddNode] while this
+	// connection's initial map is still in flight, and cleared once it
+	// is delivered. Broadcast sends skip such connections so a delta
+	// can never become the stream's first frame ahead of the initial
+	// map. The zero value means the connection is ready.
+	pendingInitial atomic.Bool
 }
 
 // multiChannelNodeConn manages multiple concurrent connections for a single node.
@@ -44,10 +68,17 @@ type multiChannelNodeConn struct {
 
 	// workMu serializes change processing for this node across batch ticks.
 	// Without this, two workers could process consecutive ticks' bundles
-	// concurrently, causing out-of-order MapResponse delivery and races
-	// on lastSentPeers (Clear+Store in updateSentPeers vs Range in
-	// computePeerDiff).
+	// concurrently, causing out-of-order [tailcfg.MapResponse] delivery and races
+	// on lastSentPeers (Clear+Store in [multiChannelNodeConn.updateSentPeers] vs
+	// Range in [multiChannelNodeConn.computePeerDiff]).
 	workMu sync.Mutex
+
+	// inFlight is true while a batched work bundle for this node is queued or
+	// being processed. processBatchedChanges refuses to queue a second bundle
+	// while one is in flight (the new changes wait in pending), so a saturated
+	// worker pool cannot deliver tick N+1 before tick N: a non-FIFO workMu
+	// cannot reorder bundles that never coexist.
+	inFlight atomic.Bool
 
 	closeOnce   sync.Once
 	updateCount atomic.Int64
@@ -55,7 +86,7 @@ type multiChannelNodeConn struct {
 	// disconnectedAt records when the last connection was removed.
 	// nil means the node is considered connected (or newly created);
 	// non-nil means the node disconnected at the stored timestamp.
-	// Used by cleanupOfflineNodes to evict stale entries.
+	// Used by [Batcher.cleanupOfflineNodes] to evict stale entries.
 	disconnectedAt atomic.Pointer[time.Time]
 
 	// lastSentPeers tracks which peers were last sent to this node.
@@ -175,8 +206,8 @@ func (mc *multiChannelNodeConn) markConnected() {
 }
 
 // markDisconnected records the current time as the moment the node
-// lost its last connection. Used by cleanupOfflineNodes to determine
-// how long the node has been offline.
+// lost its last connection. Used by [Batcher.cleanupOfflineNodes] to
+// determine how long the node has been offline.
 func (mc *multiChannelNodeConn) markDisconnected() {
 	now := time.Now()
 	mc.disconnectedAt.Store(&now)
@@ -211,6 +242,17 @@ func (mc *multiChannelNodeConn) appendPending(changes ...change.Change) {
 	mc.pendingMu.Unlock()
 }
 
+// prependPending puts changes at the head of the pending list, ahead of
+// anything queued since. Used to retry changes that could not be
+// delivered yet (initial map in flight): they were emitted before the
+// currently pending ones, and order matters for stateful patches like
+// online/offline.
+func (mc *multiChannelNodeConn) prependPending(changes ...change.Change) {
+	mc.pendingMu.Lock()
+	mc.pending = append(changes, mc.pending...)
+	mc.pendingMu.Unlock()
+}
+
 // drainPending atomically removes and returns all pending changes.
 // Returns nil if there are no pending changes.
 func (mc *multiChannelNodeConn) drainPending() []change.Change {
@@ -228,8 +270,8 @@ func (mc *multiChannelNodeConn) drainPending() []change.Change {
 // connection can block for up to 50ms), the method snapshots connections under
 // a read lock, sends without any lock held, then write-locks only to remove
 // failures. New connections added between the snapshot and cleanup are safe:
-// they receive a full initial map via AddNode, so missing this update causes
-// no data loss.
+// they receive a full initial map via [Batcher.AddNode], so missing this update
+// causes no data loss.
 func (mc *multiChannelNodeConn) send(data *tailcfg.MapResponse) error {
 	if data == nil {
 		return nil
@@ -243,13 +285,29 @@ func (mc *multiChannelNodeConn) send(data *tailcfg.MapResponse) error {
 		mc.log.Trace().
 			Msg("send: no active connections, skipping")
 
-		return nil
+		return errNoActiveConnections
 	}
 
-	// Copy the slice so we can release the read lock before sending.
-	snapshot := make([]*connectionEntry, len(mc.connections))
-	copy(snapshot, mc.connections)
+	// Copy only connections whose initial map has been delivered.
+	// A connection still awaiting its initial map receives one
+	// (generated from the current snapshot) from [Batcher.AddNode];
+	// pushing this update at it now would deliver a delta as the
+	// stream's first frame.
+	snapshot := make([]*connectionEntry, 0, len(mc.connections))
+
+	for _, conn := range mc.connections {
+		if !conn.pendingInitial.Load() {
+			snapshot = append(snapshot, conn)
+		}
+	}
 	mc.mutex.RUnlock()
+
+	if len(snapshot) == 0 {
+		mc.log.Trace().
+			Msg("send: connections present but none ready, requeue")
+
+		return errNoReadyConnections
+	}
 
 	mc.log.Trace().
 		Int("total_connections", len(snapshot)).
@@ -382,7 +440,7 @@ func (mc *multiChannelNodeConn) version() tailcfg.CapabilityVersion {
 	return mc.connections[0].version
 }
 
-// updateSentPeers updates the tracked peer state based on a sent MapResponse.
+// updateSentPeers updates the tracked peer state based on a sent [tailcfg.MapResponse].
 // This must be called after successfully sending a response to keep track of
 // what the client knows about, enabling accurate diffs for future updates.
 func (mc *multiChannelNodeConn) updateSentPeers(resp *tailcfg.MapResponse) {

@@ -156,7 +156,7 @@ func TestSnapshotFromNodes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			nodes, peersFunc := tt.setupFunc()
-			snapshot := snapshotFromNodes(nodes, peersFunc)
+			snapshot := snapshotFromNodes(nodes, peersFunc, nil)
 			tt.validate(t, nodes, snapshot)
 		})
 	}
@@ -699,7 +699,7 @@ func TestNodeStoreOperations(t *testing.T) {
 						finalNode := snapshot.nodesByID[1]
 						assert.Equal(t, "multi-update-hostname", finalNode.Hostname)
 						assert.Equal(t, "multi-update-givenname", finalNode.GivenName)
-						assert.Equal(t, []string{"tag1", "tag2"}, finalNode.Tags)
+						assert.Equal(t, []string{"tag1", "tag2"}, finalNode.Tags.List())
 					},
 				},
 			},
@@ -737,14 +737,14 @@ func TestNodeStoreOperations(t *testing.T) {
 						assert.NotNil(t, nodePtr)
 						assert.Equal(t, "db-save-hostname", nodePtr.Hostname)
 						assert.Equal(t, "db-save-given", nodePtr.GivenName)
-						assert.Equal(t, []string{"db-tag1", "db-tag2"}, nodePtr.Tags)
+						assert.Equal(t, []string{"db-tag1", "db-tag2"}, nodePtr.Tags.List())
 
 						// Verify the snapshot also reflects the same state
 						snapshot := store.data.Load()
 						storedNode := snapshot.nodesByID[1]
 						assert.Equal(t, "db-save-hostname", storedNode.Hostname)
 						assert.Equal(t, "db-save-given", storedNode.GivenName)
-						assert.Equal(t, []string{"db-tag1", "db-tag2"}, storedNode.Tags)
+						assert.Equal(t, []string{"db-tag1", "db-tag2"}, storedNode.Tags.List())
 					},
 				},
 				{
@@ -807,15 +807,15 @@ func TestNodeStoreOperations(t *testing.T) {
 						// All should have the complete final state
 						assert.Equal(t, "concurrent-db-hostname", nodePtr1.Hostname)
 						assert.Equal(t, "concurrent-db-given", nodePtr1.GivenName)
-						assert.Equal(t, []string{"concurrent-tag"}, nodePtr1.Tags)
+						assert.Equal(t, []string{"concurrent-tag"}, nodePtr1.Tags.List())
 
 						assert.Equal(t, "concurrent-db-hostname", nodePtr2.Hostname)
 						assert.Equal(t, "concurrent-db-given", nodePtr2.GivenName)
-						assert.Equal(t, []string{"concurrent-tag"}, nodePtr2.Tags)
+						assert.Equal(t, []string{"concurrent-tag"}, nodePtr2.Tags.List())
 
 						assert.Equal(t, "concurrent-db-hostname", nodePtr3.Hostname)
 						assert.Equal(t, "concurrent-db-given", nodePtr3.GivenName)
-						assert.Equal(t, []string{"concurrent-tag"}, nodePtr3.Tags)
+						assert.Equal(t, []string{"concurrent-tag"}, nodePtr3.Tags.List())
 
 						// Verify consistency with stored state
 						snapshot := store.data.Load()
@@ -1335,4 +1335,64 @@ func TestRebuildPeerMapsWithChangedPeersFunc(t *testing.T) {
 
 	assert.Equal(t, 1, peers1.Len(), "ListPeers for node1 should return 1")
 	assert.Equal(t, 1, peers2.Len(), "ListPeers for node2 should return 1")
+}
+
+// TestGetNodesByMachineKeyAllUsers ensures the lookup returns every node sharing
+// a machine key keyed by owning UserID (tagged nodes under UserID(0)), so callers
+// see the full set instead of a single arbitrary pick.
+func TestGetNodesByMachineKeyAllUsers(t *testing.T) {
+	mk := key.NewMachine().Public()
+
+	t.Run("empty when absent", func(t *testing.T) {
+		store := NewNodeStore(nil, allowAllPeersFunc, TestBatchSize, TestBatchTimeout)
+
+		store.Start()
+		defer store.Stop()
+
+		require.Empty(t, store.GetNodesByMachineKeyAllUsers(mk))
+	})
+
+	t.Run("returns all user-owned nodes keyed by user", func(t *testing.T) {
+		store := NewNodeStore(nil, allowAllPeersFunc, TestBatchSize, TestBatchTimeout)
+
+		store.Start()
+		defer store.Stop()
+
+		n1 := createTestNode(1, 1, "user1", "node1")
+		n1.MachineKey = mk
+		n2 := createTestNode(2, 2, "user2", "node2")
+		n2.MachineKey = mk
+
+		store.PutNode(n1)
+		store.PutNode(n2)
+
+		all := store.GetNodesByMachineKeyAllUsers(mk)
+		require.Len(t, all, 2)
+		require.Equal(t, types.NodeID(1), all[types.UserID(1)].ID())
+		require.Equal(t, types.NodeID(2), all[types.UserID(2)].ID())
+	})
+
+	t.Run("tagged node indexed under UserID(0)", func(t *testing.T) {
+		store := NewNodeStore(nil, allowAllPeersFunc, TestBatchSize, TestBatchTimeout)
+
+		store.Start()
+		defer store.Stop()
+
+		owned := createTestNode(1, 1, "user1", "node1")
+		owned.MachineKey = mk
+		tagged := createTestNode(3, 3, "user3", "node3")
+		tagged.MachineKey = mk
+		tagged.UserID = nil
+		tagged.User = nil
+		tagged.Tags = []string{"tag:foo"}
+
+		store.PutNode(owned)
+		store.PutNode(tagged)
+
+		all := store.GetNodesByMachineKeyAllUsers(mk)
+		require.Len(t, all, 2)
+		require.Equal(t, types.NodeID(1), all[types.UserID(1)].ID())
+		require.True(t, all[types.UserID(0)].IsTagged())
+		require.Equal(t, types.NodeID(3), all[types.UserID(0)].ID())
+	})
 }

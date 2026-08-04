@@ -2,6 +2,7 @@ package db
 
 import (
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -17,8 +19,8 @@ const (
 	fifty       = 50 * time.Millisecond
 )
 
-// TestEphemeralGarbageCollectorGoRoutineLeak is a test for a goroutine leak in EphemeralGarbageCollector().
-// It creates a new EphemeralGarbageCollector, schedules several nodes for deletion with a short expiry,
+// TestEphemeralGarbageCollectorGoRoutineLeak is a test for a goroutine leak in [EphemeralGarbageCollector].
+// It creates a new [EphemeralGarbageCollector], schedules several nodes for deletion with a short expiry,
 // and verifies that the nodes are deleted when the expiry time passes, and then
 // for any leaked goroutines after the garbage collector is closed.
 func TestEphemeralGarbageCollectorGoRoutineLeak(t *testing.T) {
@@ -89,8 +91,84 @@ func TestEphemeralGarbageCollectorGoRoutineLeak(t *testing.T) {
 	t.Logf("Final number of goroutines: %d", runtime.NumGoroutine())
 }
 
-// TestEphemeralGarbageCollectorReschedule is a test for the rescheduling of nodes in EphemeralGarbageCollector().
-// It creates a new EphemeralGarbageCollector, schedules a node for deletion with a longer expiry,
+// TestEphemeralGarbageCollectorCancelReapsGoroutine verifies that Cancel (and
+// reschedule) reaps the per-node watcher goroutine while the collector is still
+// running, rather than leaking it until Close. The production churn path is an
+// ephemeral node disconnecting (Schedule) then reconnecting (Cancel) before the
+// long expiry timer fires; a stopped timer never fires, so a watcher parked
+// only on <-timer.C would otherwise leak on every cycle.
+func TestEphemeralGarbageCollectorCancelReapsGoroutine(t *testing.T) {
+	gc := NewEphemeralGarbageCollector(func(types.NodeID) {})
+
+	go gc.Start()
+	defer gc.Close()
+
+	baseline := runtime.NumGoroutine()
+
+	const (
+		iterations = 1000
+		nodeID     = types.NodeID(42)
+	)
+
+	for range iterations {
+		gc.Schedule(nodeID, time.Hour) // disconnect: long timer, will not fire
+		gc.Cancel(nodeID)              // reconnect: must reap the watcher
+	}
+
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.LessOrEqual(c, runtime.NumGoroutine(), baseline+10,
+			"per-node goroutines leaked on Cancel/reschedule")
+	}, 2*time.Second, 20*time.Millisecond, "watcher goroutines should be reaped")
+}
+
+// TestEphemeralGarbageCollectorCancelBeatsQueuedDeletion verifies that a node
+// reconnecting (Cancel) after its deletion has already been queued on the
+// internal channel is not deleted. The timer fires and enqueues the deletion;
+// Cancel then runs before Start drains it. Start must drop the now-superseded
+// deletion rather than removing the freshly reconnected node.
+func TestEphemeralGarbageCollectorCancelBeatsQueuedDeletion(t *testing.T) {
+	const targetNode types.NodeID = 42
+
+	var (
+		mu      sync.Mutex
+		deleted []types.NodeID
+	)
+
+	e := NewEphemeralGarbageCollector(func(ni types.NodeID) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		deleted = append(deleted, ni)
+	})
+
+	// Schedule with a tiny expiry but do not drain yet: the watcher fires and
+	// enqueues the deletion onto the buffered channel.
+	e.Schedule(targetNode, time.Millisecond)
+	require.Eventually(t, func() bool {
+		return len(e.deleteCh) == 1
+	}, time.Second, time.Millisecond, "deletion should be queued")
+
+	// Node reconnects before the queue is drained.
+	e.Cancel(targetNode)
+
+	go e.Start()
+	defer e.Close()
+
+	require.Eventually(t, func() bool {
+		return len(e.deleteCh) == 0
+	}, time.Second, time.Millisecond, "Start should drain the queued deletion")
+
+	assert.Never(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return slices.Contains(deleted, targetNode)
+	}, 200*time.Millisecond, 10*time.Millisecond,
+		"cancelled node must not be deleted")
+}
+
+// TestEphemeralGarbageCollectorReschedule is a test for the rescheduling of nodes in [EphemeralGarbageCollector].
+// It creates a new [EphemeralGarbageCollector], schedules a node for deletion with a longer expiry,
 // and then reschedules it with a shorter expiry, and verifies that the node is deleted only once.
 func TestEphemeralGarbageCollectorReschedule(t *testing.T) {
 	// Deletion tracking mechanism
@@ -145,8 +223,8 @@ func TestEphemeralGarbageCollectorReschedule(t *testing.T) {
 	deleteMutex.Unlock()
 }
 
-// TestEphemeralGarbageCollectorCancelAndReschedule is a test for the cancellation and rescheduling of nodes in EphemeralGarbageCollector().
-// It creates a new EphemeralGarbageCollector, schedules a node for deletion, cancels it, and then reschedules it,
+// TestEphemeralGarbageCollectorCancelAndReschedule is a test for the cancellation and rescheduling of nodes in [EphemeralGarbageCollector].
+// It creates a new [EphemeralGarbageCollector], schedules a node for deletion, cancels it, and then reschedules it,
 // and verifies that the node is deleted only once.
 func TestEphemeralGarbageCollectorCancelAndReschedule(t *testing.T) {
 	// Deletion tracking mechanism
@@ -214,8 +292,8 @@ func TestEphemeralGarbageCollectorCancelAndReschedule(t *testing.T) {
 	deleteMutex.Unlock()
 }
 
-// TestEphemeralGarbageCollectorCloseBeforeTimerFires is a test for the closing of the EphemeralGarbageCollector before the timer fires.
-// It creates a new EphemeralGarbageCollector, schedules a node for deletion, closes the GC, and verifies that the node is not deleted.
+// TestEphemeralGarbageCollectorCloseBeforeTimerFires is a test for the closing of the [EphemeralGarbageCollector] before the timer fires.
+// It creates a new [EphemeralGarbageCollector], schedules a node for deletion, closes the GC, and verifies that the node is not deleted.
 func TestEphemeralGarbageCollectorCloseBeforeTimerFires(t *testing.T) {
 	// Deletion tracking
 	var (
@@ -264,7 +342,7 @@ func TestEphemeralGarbageCollectorCloseBeforeTimerFires(t *testing.T) {
 	deleteMutex.Unlock()
 }
 
-// TestEphemeralGarbageCollectorScheduleAfterClose verifies that calling Schedule after Close
+// TestEphemeralGarbageCollectorScheduleAfterClose verifies that calling [EphemeralGarbageCollector.Schedule] after [EphemeralGarbageCollector.Close]
 // is a no-op and doesn't cause any panics, goroutine leaks, or other issues.
 func TestEphemeralGarbageCollectorScheduleAfterClose(t *testing.T) {
 	// Count initial goroutines to check for leaks
@@ -339,7 +417,7 @@ func TestEphemeralGarbageCollectorScheduleAfterClose(t *testing.T) {
 }
 
 // TestEphemeralGarbageCollectorConcurrentScheduleAndClose tests the behavior of the garbage collector
-// when Schedule and Close are called concurrently from multiple goroutines.
+// when [EphemeralGarbageCollector.Schedule] and [EphemeralGarbageCollector.Close] are called concurrently from multiple goroutines.
 func TestEphemeralGarbageCollectorConcurrentScheduleAndClose(t *testing.T) {
 	// Count initial goroutines
 	initialGoroutines := runtime.NumGoroutine()
@@ -379,7 +457,7 @@ func TestEphemeralGarbageCollectorConcurrentScheduleAndClose(t *testing.T) {
 	stopScheduling := make(chan struct{})
 
 	// Track how many nodes have been scheduled
-	var scheduledCount int64
+	var scheduledCount atomic.Int64
 
 	// Launch goroutines that continuously schedule nodes
 	for schedulerIndex := range numSchedulers {
@@ -396,7 +474,7 @@ func TestEphemeralGarbageCollectorConcurrentScheduleAndClose(t *testing.T) {
 				default:
 					nodeID := types.NodeID(baseNodeID + j + 1) //nolint:gosec // safe conversion in test
 					gc.Schedule(nodeID, 1*time.Hour)           // Long expiry to ensure it doesn't trigger during test
-					atomic.AddInt64(&scheduledCount, 1)
+					scheduledCount.Add(1)
 
 					// Yield to other goroutines to introduce variability
 					runtime.Gosched()
@@ -410,7 +488,7 @@ func TestEphemeralGarbageCollectorConcurrentScheduleAndClose(t *testing.T) {
 		defer wg.Done()
 
 		// Wait until enough nodes have been scheduled
-		for atomic.LoadInt64(&scheduledCount) < int64(numSchedulers*closeAfterNodes) {
+		for scheduledCount.Load() < int64(numSchedulers*closeAfterNodes) {
 			runtime.Gosched()
 		}
 
