@@ -10,8 +10,31 @@ import (
 
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/require"
 	"zombiezen.com/go/postgrestest"
 )
+
+// runOnBothDialects runs the given test body against a fresh SQLite database
+// and a fresh PostgreSQL database. Schema-level bugs (dialect-specific DDL in
+// migrations) only surface on one backend, so any test that exercises the
+// database should run on both.
+//
+// The postgres subtest skips itself if a local server cannot be started, see
+// newPostgresDBForTest.
+func runOnBothDialects(t *testing.T, run func(t *testing.T, db *HSDatabase)) {
+	t.Helper()
+
+	t.Run("sqlite", func(t *testing.T) {
+		db, err := newSQLiteTestDB()
+		require.NoError(t, err)
+
+		run(t, db)
+	})
+
+	t.Run("postgres", func(t *testing.T) {
+		run(t, newPostgresTestDB(t))
+	})
+}
 
 func newSQLiteTestDB() (*HSDatabase, error) {
 	tmpDir, err := os.MkdirTemp("", "headscale-db-test-*")

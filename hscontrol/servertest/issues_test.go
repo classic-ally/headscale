@@ -107,6 +107,21 @@ func TestIssuesMapContent(t *testing.T) {
 		c1.WaitForPeers(t, 1, 10*time.Second)
 		c2.WaitForPeers(t, 1, 10*time.Second)
 
+		// UserProfiles is populated independently of the peer list, so the
+		// first netmap that satisfies WaitForPeers may carry the peer node
+		// without its profile yet. Wait for the profile itself rather than
+		// snapshotting straight after the peer count is met.
+		c1.WaitForCondition(t, "peer user profile present", 10*time.Second,
+			func(nm *netmap.NetworkMap) bool {
+				if len(nm.Peers) < 1 {
+					return false
+				}
+
+				_, ok := nm.UserProfiles[nm.Peers[0].User()]
+
+				return ok
+			})
+
 		nm := c1.Netmap()
 		require.NotNil(t, nm)
 

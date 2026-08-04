@@ -15,6 +15,12 @@ import (
 	"tailscale.com/types/key"
 )
 
+// batchGroupSize is the number of concurrent writes the batching steps of
+// TestNodeStoreOperations issue at once. Using it as the NodeStore batch size
+// makes those writes flush as one batch on the size threshold instead of
+// racing the batch timer.
+const batchGroupSize = 3
+
 func TestSnapshotFromNodes(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -513,7 +519,16 @@ func TestNodeStoreOperations(t *testing.T) {
 				node2 := createTestNode(2, 1, "user1", "node2")
 				initialNodes := types.Nodes{&node1, &node2}
 
-				return NewNodeStore(initialNodes, allowAllPeersFunc, TestBatchSize, TestBatchTimeout)
+				// The steps below assert that concurrent writes are applied as
+				// a single batch. With the default TestBatchSize (5) a group of
+				// three writes can only flush on the batch timer, so under load
+				// the group can straddle two ticks and the assertion fails
+				// spuriously. Size the batch to the group instead: processWrite
+				// flushes as soon as len(batch) >= batchSize, making the
+				// grouping deterministic rather than timing-dependent. The
+				// timeout only backstops the one step that issues a single
+				// write, so it is kept short enough to not slow the test much.
+				return NewNodeStore(initialNodes, allowAllPeersFunc, batchGroupSize, 500*time.Millisecond)
 			},
 			steps: []testStep{
 				{

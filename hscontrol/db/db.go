@@ -730,43 +730,12 @@ WHERE tags IS NOT NULL AND tags != '[]' AND tags != '';
 			{
 				ID: "202603311400-add-domains-tables",
 				Migrate: func(tx *gorm.DB) error {
-					if err := tx.Exec(`
-CREATE TABLE domains(
-  id integer PRIMARY KEY AUTOINCREMENT,
-  domain text NOT NULL,
-  node_id integer,
-  provider text,
-  api_token text,
-  verified numeric DEFAULT false,
-  verify_token text,
-  created_at datetime,
-  CONSTRAINT fk_domains_node FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
-)`).Error; err != nil {
-						return fmt.Errorf("creating domains table: %w", err)
+					err := createDomainTables(tx)
+					if err != nil {
+						return err
 					}
 
-					if err := tx.Exec(`CREATE UNIQUE INDEX idx_domains_domain ON domains(domain)`).Error; err != nil {
-						return fmt.Errorf("creating domains unique index: %w", err)
-					}
-
-					if err := tx.Exec(`
-CREATE TABLE domain_access(
-  id integer PRIMARY KEY AUTOINCREMENT,
-  domain_id integer NOT NULL,
-  user_id integer NOT NULL,
-  role text NOT NULL DEFAULT 'user',
-  created_at datetime,
-  CONSTRAINT fk_domain_access_domain FOREIGN KEY(domain_id) REFERENCES domains(id) ON DELETE CASCADE,
-  CONSTRAINT fk_domain_access_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-)`).Error; err != nil {
-						return fmt.Errorf("creating domain_access table: %w", err)
-					}
-
-					if err := tx.Exec(`CREATE UNIQUE INDEX idx_domain_access_unique ON domain_access(domain_id, user_id)`).Error; err != nil {
-						return fmt.Errorf("creating domain_access unique index: %w", err)
-					}
-
-					return nil
+					return createDomainIndexes(tx)
 				},
 				Rollback: func(db *gorm.DB) error { return nil },
 			},
@@ -788,30 +757,7 @@ CREATE TABLE domain_access(
 
 		// Create domain tables using raw SQL to match schema.sql exactly.
 		// Must come after nodes table is created (FK dependency).
-		err = tx.Exec(`CREATE TABLE domains(
-  id integer PRIMARY KEY AUTOINCREMENT,
-  domain text NOT NULL,
-  node_id integer,
-  provider text,
-  api_token text,
-  verified numeric DEFAULT false,
-  verify_token text,
-  created_at datetime,
-  CONSTRAINT fk_domains_node FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
-)`).Error
-		if err != nil {
-			return err
-		}
-
-		err = tx.Exec(`CREATE TABLE domain_access(
-  id integer PRIMARY KEY AUTOINCREMENT,
-  domain_id integer NOT NULL,
-  user_id integer NOT NULL,
-  role text NOT NULL DEFAULT 'user',
-  created_at datetime,
-  CONSTRAINT fk_domain_access_domain FOREIGN KEY(domain_id) REFERENCES domains(id) ON DELETE CASCADE,
-  CONSTRAINT fk_domain_access_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-)`).Error
+		err = createDomainTables(tx)
 		if err != nil {
 			return err
 		}
@@ -921,6 +867,92 @@ CREATE TABLE domain_access(
 	}
 
 	return &db, err
+}
+
+// createDomainTables creates the domains and domain_access tables.
+//
+// The DDL is dialect-specific: the SQLite form is the source of truth in
+// schema.sql and is validated by squibble on startup, so it must not drift.
+// The PostgreSQL form mirrors the types GORM emits for the other tables
+// (bigserial/integer identity columns, boolean, timestamptz) so both backends
+// end up with an equivalent schema.
+//
+// Indexes are created separately because they are portable as written; see
+// createDomainIndexes and the shared index list in InitSchema.
+func createDomainTables(tx *gorm.DB) error {
+	var domains, domainAccess string
+
+	if tx.Name() == "postgres" {
+		domains = `CREATE TABLE domains(
+  id bigserial PRIMARY KEY,
+  domain text NOT NULL,
+  node_id bigint,
+  provider text,
+  api_token text,
+  verified boolean DEFAULT false,
+  verify_token text,
+  created_at timestamptz,
+  CONSTRAINT fk_domains_node FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
+)`
+		domainAccess = `CREATE TABLE domain_access(
+  id bigserial PRIMARY KEY,
+  domain_id bigint NOT NULL,
+  user_id integer NOT NULL,
+  role text NOT NULL DEFAULT 'user',
+  created_at timestamptz,
+  CONSTRAINT fk_domain_access_domain FOREIGN KEY(domain_id) REFERENCES domains(id) ON DELETE CASCADE,
+  CONSTRAINT fk_domain_access_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+)`
+	} else {
+		domains = `CREATE TABLE domains(
+  id integer PRIMARY KEY AUTOINCREMENT,
+  domain text NOT NULL,
+  node_id integer,
+  provider text,
+  api_token text,
+  verified numeric DEFAULT false,
+  verify_token text,
+  created_at datetime,
+  CONSTRAINT fk_domains_node FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
+)`
+		domainAccess = `CREATE TABLE domain_access(
+  id integer PRIMARY KEY AUTOINCREMENT,
+  domain_id integer NOT NULL,
+  user_id integer NOT NULL,
+  role text NOT NULL DEFAULT 'user',
+  created_at datetime,
+  CONSTRAINT fk_domain_access_domain FOREIGN KEY(domain_id) REFERENCES domains(id) ON DELETE CASCADE,
+  CONSTRAINT fk_domain_access_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+)`
+	}
+
+	err := tx.Exec(domains).Error
+	if err != nil {
+		return fmt.Errorf("creating domains table: %w", err)
+	}
+
+	err = tx.Exec(domainAccess).Error
+	if err != nil {
+		return fmt.Errorf("creating domain_access table: %w", err)
+	}
+
+	return nil
+}
+
+// createDomainIndexes creates the unique indexes for the domain tables. The
+// statements are portable across SQLite and PostgreSQL.
+func createDomainIndexes(tx *gorm.DB) error {
+	err := tx.Exec(`CREATE UNIQUE INDEX idx_domains_domain ON domains(domain)`).Error
+	if err != nil {
+		return fmt.Errorf("creating domains unique index: %w", err)
+	}
+
+	err = tx.Exec(`CREATE UNIQUE INDEX idx_domain_access_unique ON domain_access(domain_id, user_id)`).Error
+	if err != nil {
+		return fmt.Errorf("creating domain_access unique index: %w", err)
+	}
+
+	return nil
 }
 
 func openDB(cfg types.DatabaseConfig) (*gorm.DB, error) {
