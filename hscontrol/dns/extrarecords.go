@@ -30,7 +30,7 @@ type ExtraRecordsMan struct {
 	hashes   map[string][32]byte
 }
 
-// NewExtraRecordsManager creates a new ExtraRecordsMan and starts watching the file at the given path.
+// NewExtraRecordsManager creates a new [ExtraRecordsMan] and starts watching the file at the given path.
 func NewExtraRecordsManager(path string) (*ExtraRecordsMan, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -158,11 +158,12 @@ func (e *ExtraRecordsMan) updateRecords() {
 	}
 
 	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	// If there has not been any change, ignore the update.
 	if oldHash, ok := e.hashes[e.path]; ok {
 		if newHash == oldHash {
+			e.mu.Unlock()
+
 			return
 		}
 	}
@@ -171,13 +172,22 @@ func (e *ExtraRecordsMan) updateRecords() {
 
 	e.records = set.SetOf(records)
 	e.hashes[e.path] = newHash
+	toSend := e.records.Slice()
 
 	log.Trace().Caller().Interface("records", e.records).Msgf("extra records updated from path, count old: %d, new: %d", oldCount, e.records.Len())
 
-	e.updateCh <- e.records.Slice()
+	// Release the lock before the (potentially blocking) send so a slow or
+	// absent consumer cannot stall Records() readers, and abort the send on
+	// shutdown instead of leaking this goroutine on the closed-down channel.
+	e.mu.Unlock()
+
+	select {
+	case e.updateCh <- toSend:
+	case <-e.closeCh:
+	}
 }
 
-// readExtraRecordsFromPath reads a JSON file of tailcfg.DNSRecord
+// readExtraRecordsFromPath reads a JSON file of [tailcfg.DNSRecord]
 // and returns the records and the hash of the file.
 func readExtraRecordsFromPath(path string) ([]tailcfg.DNSRecord, [32]byte, error) {
 	b, err := os.ReadFile(path)

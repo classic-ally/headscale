@@ -27,7 +27,7 @@ var (
 )
 
 // offlineNodeCleanupThreshold is how long a node must be disconnected
-// before cleanupOfflineNodes removes its in-memory state.
+// before [Batcher.cleanupOfflineNodes] removes its in-memory state.
 const offlineNodeCleanupThreshold = 15 * time.Minute
 
 var mapResponseGenerated = promauto.NewCounterVec(prometheus.CounterOpts{
@@ -49,7 +49,7 @@ func NewBatcher(batchTime time.Duration, workers int, mapper *mapper) *Batcher {
 	}
 }
 
-// NewBatcherAndMapper creates a new Batcher with its mapper.
+// NewBatcherAndMapper creates a new [Batcher] with its [mapper].
 func NewBatcherAndMapper(cfg *types.Config, state *state.State) *Batcher {
 	m := newMapper(cfg, state)
 	b := NewBatcher(cfg.Tuning.BatchChangeDelay, cfg.Tuning.BatcherWorkers, m)
@@ -69,7 +69,7 @@ type nodeConnection interface {
 	updateSentPeers(resp *tailcfg.MapResponse)
 }
 
-// generateMapResponse generates a [tailcfg.MapResponse] for the given NodeID based on the provided [change.Change].
+// generateMapResponse generates a [tailcfg.MapResponse] for the given [types.NodeID] based on the provided [change.Change].
 func generateMapResponse(nc nodeConnection, mapper *mapper, r change.Change) (*tailcfg.MapResponse, error) {
 	nodeID := nc.nodeID()
 	version := nc.version()
@@ -128,6 +128,32 @@ func generateMapResponse(nc nodeConnection, mapper *mapper, r change.Change) (*t
 		return nil, fmt.Errorf("generating map response for nodeID %d: %w", nodeID, err)
 	}
 
+	// When a full update (SendAllPeers=true) produces zero visible peers
+	// (e.g., a restrictive policy isolates this node), the resulting
+	// [tailcfg.MapResponse] has Peers: []*tailcfg.Node{} (empty non-nil slice).
+	//
+	// The Tailscale client only treats Peers as a full authoritative
+	// replacement when len(Peers) > 0 (controlclient/map.go:462).
+	// An empty Peers slice is indistinguishable from a delta response,
+	// so the client silently preserves its existing peer state.
+	//
+	// This matters when a [change.FullUpdate] replaces a pending
+	// [change.PolicyChange] in the batcher ([Batcher.addToBatch]
+	// short-circuits on [change.HasFull]). The [change.PolicyChange]
+	// would have computed PeersRemoved via
+	// [multiChannelNodeConn.computePeerDiff], but the [change.FullUpdate]
+	// path uses [MapResponseBuilder.WithPeers] which sets Peers: [].
+	//
+	// Fix: when a full update results in zero peers, compute the diff
+	// against lastSentPeers and add explicit PeersRemoved entries so
+	// the client correctly clears its stale peer state.
+	if mapResp != nil && r.SendAllPeers && len(mapResp.Peers) == 0 {
+		removedPeers := nc.computePeerDiff(nil)
+		if len(removedPeers) > 0 {
+			mapResp.PeersRemoved = removedPeers
+		}
+	}
+
 	return mapResp, nil
 }
 
@@ -154,10 +180,20 @@ func handleNodeChange(nc nodeConnection, mapper *mapper, r change.Change) error 
 	// Send the map response
 	err = nc.send(data)
 	if err != nil {
+		// If the node has no active connections, the data was not
+		// delivered. Do not update lastSentPeers — recording phantom
+		// peer state would corrupt future computePeerDiff calculations,
+		// causing the node to miss peer additions or removals after
+		// reconnection.
+		if errors.Is(err, errNoActiveConnections) {
+			return nil
+		}
+
 		return fmt.Errorf("sending map response to node %d: %w", nodeID, err)
 	}
 
-	// Update peer tracking after successful send
+	// Update peer tracking only after confirmed delivery to at
+	// least one active connection.
 	nc.updateSentPeers(data)
 
 	return nil
@@ -172,7 +208,7 @@ type workResult struct {
 // work represents a unit of work to be processed by workers.
 // All pending changes for a node are bundled into a single work item
 // so that one worker processes them sequentially. This prevents
-// out-of-order MapResponse delivery and races on lastSentPeers
+// out-of-order [tailcfg.MapResponse] delivery and races on lastSentPeers
 // that occur when multiple workers process changes for the same node.
 type work struct {
 	changes  []change.Change
@@ -191,9 +227,9 @@ var (
 // Batcher batches and distributes map responses to connected nodes.
 // It uses concurrent maps, per-node mutexes, and a worker pool.
 //
-// Lifecycle: Call Start() to spawn workers, then Close() to shut down.
-// Close() blocks until all workers have exited. A Batcher must not
-// be reused after Close().
+// Lifecycle: Call [Batcher.Start] to spawn workers, then [Batcher.Close]
+// to shut down. [Batcher.Close] blocks until all workers have exited.
+// A [Batcher] must not be reused after [Batcher.Close].
 type Batcher struct {
 	tick    *time.Ticker
 	mapper  *mapper
@@ -244,18 +280,36 @@ func (b *Batcher) AddNode(
 		created: now,
 		stop:    stop,
 	}
+	// Block broadcast sends to this connection until its initial map
+	// is delivered below, so a delta cannot become the stream's first
+	// frame — clients reject streams whose first frame lacks the self
+	// node.
+	newEntry.pendingInitial.Store(true)
 	// Initialize last used timestamp
 	newEntry.lastUsed.Store(now.Unix())
 
-	// Get or create multiChannelNodeConn - this reuses existing offline nodes for rapid reconnection
-	nodeConn, loaded := b.nodes.LoadOrStore(id, newMultiChannelNodeConn(id, b.mapper))
+	// Get or create the multiChannelNodeConn and register this connection in a
+	// single Compute so the new connection is visible atomically. Doing the
+	// LoadOrStore and addConnection as separate steps let cleanupOfflineNodes
+	// (which deletes via Compute when hasActiveConnections() is false) observe a
+	// reused offline conn with zero connections mid-reconnect and delete it,
+	// orphaning the live connection.
+	var nodeConn *multiChannelNodeConn
 
-	if !loaded {
-		b.totalNodes.Add(1)
-	}
+	b.nodes.Compute(
+		id,
+		func(existing *multiChannelNodeConn, loaded bool) (*multiChannelNodeConn, xsync.ComputeOp) {
+			if !loaded || existing == nil {
+				existing = newMultiChannelNodeConn(id, b.mapper)
+				b.totalNodes.Add(1)
+			}
 
-	// Add connection to the list (lock-free)
-	nodeConn.addConnection(newEntry)
+			existing.addConnection(newEntry)
+			nodeConn = existing
+
+			return existing, xsync.UpdateOp
+		},
+	)
 
 	// Use the worker pool for controlled concurrency instead of direct generation
 	initialMap, err := b.MapResponseFromChange(id, change.FullSelf(id))
@@ -274,7 +328,17 @@ func (b *Batcher) AddNode(
 	// and we want to avoid the race condition where the receiver isn't ready yet
 	select {
 	case c <- initialMap:
-		// Success
+		// Record sent peers only after confirmed delivery, mirroring the async
+		// path, and under workMu so a concurrent async bundle for this node
+		// cannot interleave its own lastSentPeers update.
+		nodeConn.workMu.Lock()
+		nodeConn.updateSentPeers(initialMap)
+		nodeConn.workMu.Unlock()
+
+		// Open the connection for broadcast sends now that the initial
+		// map is the stream's first frame; send() requeued any changes
+		// that arrived in the meantime.
+		newEntry.pendingInitial.Store(false)
 	case <-time.After(5 * time.Second): //nolint:mnd
 		nlog.Error().Err(ErrInitialMapSendTimeout).Msg("initial map send timeout")
 		nlog.Debug().Caller().Dur("timeout.duration", 5*time.Second). //nolint:mnd
@@ -447,9 +511,11 @@ func (b *Batcher) worker(workerID int) {
 							Uint64(zf.NodeID, w.nodeID.Uint64()).
 							Str(zf.Reason, w.changes[0].Reason).
 							Msg("failed to generate map response for synchronous work")
-					} else if result.mapResponse != nil {
-						nc.updateSentPeers(result.mapResponse)
 					}
+					// Peer tracking is recorded by the caller (AddNode) only
+					// after the initial map is actually delivered; recording it
+					// here, before delivery, would leave phantom lastSentPeers
+					// if the send times out.
 
 					nc.workMu.Unlock()
 				} else {
@@ -476,9 +542,24 @@ func (b *Batcher) worker(workerID int) {
 			// finish — preventing out-of-order delivery and races
 			// on lastSentPeers (Clear+Store vs Range).
 			if nc, exists := b.nodes.Load(w.nodeID); exists && nc != nil {
+				// Changes that found only connections still awaiting
+				// their initial map are retried next tick: the
+				// in-flight initial map may have been generated from
+				// a snapshot older than the change, so dropping them
+				// would lose updates. Collected and prepended as a
+				// group to keep their order ahead of newer pending
+				// changes — order matters for stateful patches like
+				// online/offline.
+				var retry []change.Change
+
 				nc.workMu.Lock()
 				for _, ch := range w.changes {
 					err := nc.change(ch)
+					if errors.Is(err, errNoReadyConnections) {
+						retry = append(retry, ch)
+						continue
+					}
+
 					if err != nil {
 						b.workErrors.Add(1)
 						wlog.Error().Err(err).
@@ -488,6 +569,13 @@ func (b *Batcher) worker(workerID int) {
 					}
 				}
 				nc.workMu.Unlock()
+
+				if len(retry) > 0 {
+					nc.prependPending(retry...)
+				}
+
+				// Bundle delivered; allow the next tick's bundle to queue.
+				nc.inFlight.Store(false)
 			}
 		case <-b.done:
 			wlog.Debug().Msg("batcher shutting down, exiting worker")
@@ -517,11 +605,11 @@ func (b *Batcher) addToBatch(changes ...change.Change) {
 	// still has it registered. By cleaning up here, we prevent "node not found"
 	// errors when workers try to generate map responses for deleted nodes.
 	//
-	// Safety: change.Change.PeersRemoved is ONLY populated when nodes are actually
-	// deleted from the system (via change.NodeRemoved in state.DeleteNode). Policy
-	// changes that affect peer visibility do NOT use this field - they set
+	// Safety: [change.Change.PeersRemoved] is ONLY populated when nodes are actually
+	// deleted from the system (via [change.NodeRemoved] in [state.State.DeleteNode]).
+	// Policy changes that affect peer visibility do NOT use this field - they set
 	// RequiresRuntimePeerComputation=true and compute removed peers at runtime,
-	// putting them in tailcfg.MapResponse.PeersRemoved (a different struct).
+	// putting them in [tailcfg.MapResponse.PeersRemoved] (a different struct).
 	// Therefore, this cleanup only removes nodes that are truly being deleted,
 	// not nodes that are still connected but have lost visibility of certain peers.
 	//
@@ -589,14 +677,24 @@ func (b *Batcher) processBatchedChanges() {
 			return true
 		}
 
+		// Only one batched bundle per node may be in flight at a time. If the
+		// previous tick's bundle is still queued or processing, leave this
+		// tick's changes in pending; they are picked up once it completes. This
+		// keeps delivery ordered even when the worker pool is saturated.
+		if nc.inFlight.Load() {
+			return true
+		}
+
 		pending := nc.drainPending()
 		if len(pending) == 0 {
 			return true
 		}
 
+		// One policy recompute rebuilds the whole netmap; drop same-tick repeats.
+		pending = change.DedupePolicyChanges(pending)
+
 		// Queue a single work item containing all pending changes.
-		// One item per node ensures a single worker processes them
-		// sequentially, preventing out-of-order delivery.
+		nc.inFlight.Store(true)
 		b.queueWork(work{changes: pending, nodeID: nodeID, resultCh: nil})
 
 		return true
@@ -604,8 +702,8 @@ func (b *Batcher) processBatchedChanges() {
 }
 
 // cleanupOfflineNodes removes nodes that have been offline for too long to prevent memory leaks.
-// Uses Compute() for atomic check-and-delete to prevent TOCTOU races where a node
-// reconnects between the hasActiveConnections() check and the Delete() call.
+// Uses xsync.Map.Compute for atomic check-and-delete to prevent TOCTOU races where a node
+// reconnects between the hasActiveConnections check and the Delete call.
 func (b *Batcher) cleanupOfflineNodes() {
 	var nodesToCleanup []types.NodeID
 

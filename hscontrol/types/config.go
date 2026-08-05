@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -24,19 +25,21 @@ import (
 )
 
 const (
-	defaultOIDCExpiryTime               = 180 * 24 * time.Hour // 180 Days
-	maxDuration           time.Duration = 1<<63 - 1
-	PKCEMethodPlain       string        = "plain"
-	PKCEMethodS256        string        = "S256"
+	PKCEMethodPlain string = "plain"
+	PKCEMethodS256  string = "S256"
 
 	defaultNodeStoreBatchSize = 100
 )
 
 var (
 	errOidcMutuallyExclusive     = errors.New("oidc_client_secret and oidc_client_secret_path are mutually exclusive")
+	errOIDCIssuerInvalid         = errors.New("oidc.issuer must be a valid http(s) URL")
+	errOIDCClientIDRequired      = errors.New("oidc.client_id is required when oidc.issuer is set")
+	errOIDCClientSecretRequired  = errors.New("oidc.client_secret or oidc.client_secret_path is required when oidc.issuer is set")
 	errServerURLSuffix           = errors.New("server_url cannot be part of base_domain in a way that could make the DERP and headscale server unreachable")
 	errServerURLSame             = errors.New("server_url cannot use the same domain as base_domain in a way that could make the DERP and headscale server unreachable")
 	errInvalidPKCEMethod         = errors.New("pkce.method must be either 'plain' or 'S256'")
+	errTrustedProxyZeroRange     = errors.New("0.0.0.0/0 and ::/0 are not allowed")
 	ErrNoPrefixConfigured        = errors.New("no IPv4 or IPv6 prefix configured, minimum one prefix is required")
 	ErrInvalidAllocationStrategy = errors.New("invalid prefix allocation strategy")
 )
@@ -55,21 +58,60 @@ const (
 	PolicyModeFile = "file"
 )
 
+// EphemeralConfig contains configuration for ephemeral node lifecycle.
+type EphemeralConfig struct {
+	// InactivityTimeout is how long an ephemeral node can be offline
+	// before it is automatically deleted.
+	InactivityTimeout time.Duration
+}
+
+// HARouteConfig contains configuration for HA subnet router health probing.
+type HARouteConfig struct {
+	// ProbeInterval is how often HA subnet routers are probed.
+	// A zero or negative duration disables probing.
+	ProbeInterval time.Duration
+
+	// ProbeTimeout is the maximum time to wait for a probe response
+	// before declaring a node unhealthy. Must be less than [HARouteConfig.ProbeInterval].
+	ProbeTimeout time.Duration
+}
+
+// RouteConfig contains configuration for route behaviour.
+type RouteConfig struct {
+	HA HARouteConfig
+}
+
+// NodeConfig contains configuration for node lifecycle and expiry.
+type NodeConfig struct {
+	// Expiry is the default key expiry duration for non-tagged nodes.
+	// Applies to all registration methods (auth key, CLI, web, OIDC).
+	// Tagged nodes are exempt and never expire.
+	// A zero/negative duration means no default expiry (nodes never expire).
+	Expiry time.Duration
+
+	// Ephemeral contains configuration for ephemeral node lifecycle.
+	Ephemeral EphemeralConfig
+
+	// Routes contains configuration for route behaviour.
+	Routes RouteConfig
+}
+
 // Config contains the initial Headscale configuration.
 type Config struct {
-	ServerURL                      string
-	Addr                           string
-	MetricsAddr                    string
-	GRPCAddr                       string
-	GRPCAllowInsecure              bool
-	EphemeralNodeInactivityTimeout time.Duration
-	PrefixV4                       *netip.Prefix
-	PrefixV6                       *netip.Prefix
-	IPAllocation                   IPAllocationStrategy
-	NoisePrivateKeyPath            string
-	BaseDomain                     string
-	Log                            LogConfig
-	DisableUpdateCheck             bool
+	ServerURL           string
+	Addr                string
+	MetricsAddr         string
+	GRPCAddr            string
+	GRPCAllowInsecure   bool
+	TrustedProxies      []netip.Prefix
+	Node                NodeConfig
+	PrefixV4            *netip.Prefix
+	PrefixV6            *netip.Prefix
+	IPAllocation        IPAllocationStrategy
+	NoisePrivateKeyPath string
+	BaseDomain          string
+	Log                 LogConfig
+	DisableUpdateCheck  bool
 
 	Database DatabaseConfig
 
@@ -82,7 +124,7 @@ type Config struct {
 
 	// DNSConfig is the headscale representation of the DNS configuration.
 	// It is kept in the config update for some settings that are
-	// not directly converted into a tailcfg.DNSConfig.
+	// not directly converted into a [tailcfg.DNSConfig].
 	DNSConfig DNSConfig
 
 	// TailcfgDNSConfig is the tailcfg representation of the DNS configuration,
@@ -99,9 +141,9 @@ type Config struct {
 
 	OIDC OIDCConfig
 
-	LogTail             LogTailConfig
-	RandomizeClientPort bool
-	Taildrop            TaildropConfig
+	LogTail    LogTailConfig
+	Taildrop   TaildropConfig
+	AutoUpdate AutoUpdateConfig
 
 	CLI CLIConfig
 
@@ -136,7 +178,7 @@ type PostgresConfig struct {
 	Port                int
 	Name                string
 	User                string
-	Pass                string
+	Pass                string `json:"-"` // never serialise the database password
 	Ssl                 string
 	MaxOpenConnections  int
 	MaxIdleConnections  int
@@ -191,14 +233,13 @@ type OIDCConfig struct {
 	OnlyStartIfOIDCIsAvailable bool
 	Issuer                     string
 	ClientID                   string
-	ClientSecret               string
+	ClientSecret               string `json:"-"` // never serialise the OIDC client secret
 	Scope                      []string
 	ExtraParams                map[string]string
 	AllowedDomains             []string
 	AllowedUsers               []string
 	AllowedGroups              []string
 	EmailVerifiedRequired      bool
-	Expiry                     time.Duration
 	UseExpiryFromToken         bool
 	PKCE                       PKCEConfig
 }
@@ -229,9 +270,18 @@ type TaildropConfig struct {
 	Enabled bool
 }
 
+// AutoUpdateConfig controls the tailnet-wide default for client
+// auto-update. When Enabled is true, headscale emits the
+// [tailcfg.NodeAttrDefaultAutoUpdate] cap with value [true] on every
+// node's CapMap; clients fall back to that default unless they have
+// opted in or out locally.
+type AutoUpdateConfig struct {
+	Enabled bool
+}
+
 type CLIConfig struct {
 	Address  string
-	APIKey   string
+	APIKey   string `json:"-"` // never serialise the headscale admin API key
 	Timeout  time.Duration
 	Insecure bool
 }
@@ -272,13 +322,15 @@ type Tuning struct {
 	// updates for connected clients.
 	BatcherWorkers int
 
-	// RegisterCacheCleanup is the interval between cleanup operations for
-	// expired registration cache entries.
-	RegisterCacheCleanup time.Duration
-
 	// RegisterCacheExpiration is how long registration cache entries remain
-	// valid before being eligible for cleanup.
+	// valid before being eligible for eviction.
 	RegisterCacheExpiration time.Duration
+
+	// RegisterCacheMaxEntries bounds the number of pending registration
+	// entries the auth cache will hold. Older entries are evicted (LRU)
+	// when the cap is reached, preventing unauthenticated cache-fill DoS.
+	// A value of 0 falls back to defaultRegisterCacheMaxEntries (1024).
+	RegisterCacheMaxEntries int
 
 	// NodeStoreBatchSize controls how many write operations are accumulated
 	// before rebuilding the in-memory node snapshot.
@@ -299,7 +351,7 @@ type Tuning struct {
 	// NodeStoreBatchTimeout is the maximum time to wait before processing a
 	// partial batch of node operations.
 	//
-	// When NodeStoreBatchSize operations haven't accumulated, this timeout ensures
+	// When [Tuning.NodeStoreBatchSize] operations haven't accumulated, this timeout ensures
 	// writes don't wait indefinitely. The batch processes when either the size
 	// threshold is reached OR this timeout expires, whichever comes first.
 	//
@@ -317,8 +369,37 @@ func validatePKCEMethod(method string) error {
 	return nil
 }
 
-// Domain returns the hostname/domain part of the ServerURL.
-// If the ServerURL is not a valid URL, it returns the BaseDomain.
+// validateOIDCConfig validates the OIDC settings, called when oidc.issuer is
+// set. It fails fast on a setup that cannot work: an invalid PKCE method, a
+// malformed issuer URL (which would otherwise surface as an opaque discovery
+// error or, worse, resolve to an unintended provider), or a missing client
+// id/secret.
+func validateOIDCConfig() error {
+	err := validatePKCEMethod(viper.GetString("oidc.pkce.method"))
+	if err != nil {
+		return err
+	}
+
+	issuer := viper.GetString("oidc.issuer")
+
+	u, err := url.Parse(issuer)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return fmt.Errorf("%w: got %q", errOIDCIssuerInvalid, issuer)
+	}
+
+	if viper.GetString("oidc.client_id") == "" {
+		return errOIDCClientIDRequired
+	}
+
+	if viper.GetString("oidc.client_secret") == "" && viper.GetString("oidc.client_secret_path") == "" {
+		return errOIDCClientSecretRequired
+	}
+
+	return nil
+}
+
+// Domain returns the hostname/domain part of the [Config.ServerURL].
+// If the [Config.ServerURL] is not a valid URL, it returns the [Config.BaseDomain].
 func (c *Config) Domain() string {
 	u, err := url.Parse(c.ServerURL)
 	if err != nil {
@@ -331,7 +412,7 @@ func (c *Config) Domain() string {
 // LoadConfig prepares and loads the Headscale configuration into Viper.
 // This means it sets the default values, reads the configuration file and
 // environment variables, and handles deprecated configuration options.
-// It has to be called before LoadServerConfig and LoadCLIConfig.
+// It has to be called before [LoadServerConfig] and [LoadCLIConfig].
 // The configuration is not validated and the caller should check for errors
 // using a validation function.
 func LoadConfig(path string, isFile bool) error {
@@ -398,17 +479,19 @@ func LoadConfig(path string, isFile bool) error {
 
 	viper.SetDefault("oidc.scope", []string{oidc.ScopeOpenID, "profile", "email"})
 	viper.SetDefault("oidc.only_start_if_oidc_is_available", true)
-	viper.SetDefault("oidc.expiry", "180d")
 	viper.SetDefault("oidc.use_expiry_from_token", false)
 	viper.SetDefault("oidc.pkce.enabled", false)
 	viper.SetDefault("oidc.pkce.method", "S256")
 	viper.SetDefault("oidc.email_verified_required", true)
 
 	viper.SetDefault("logtail.enabled", false)
-	viper.SetDefault("randomize_client_port", false)
 	viper.SetDefault("taildrop.enabled", true)
+	viper.SetDefault("auto_update.enabled", false)
 
-	viper.SetDefault("ephemeral_node_inactivity_timeout", "120s")
+	viper.SetDefault("node.expiry", "0")
+	viper.SetDefault("node.ephemeral.inactivity_timeout", "120s")
+	viper.SetDefault("node.routes.ha.probe_interval", "10s")
+	viper.SetDefault("node.routes.ha.probe_timeout", "5s")
 
 	viper.SetDefault("tuning.notifier_send_timeout", "800ms")
 	viper.SetDefault("tuning.batch_change_delay", "800ms")
@@ -429,6 +512,51 @@ func LoadConfig(path string, isFile bool) error {
 	}
 
 	return nil
+}
+
+// resolveEphemeralInactivityTimeout resolves the ephemeral inactivity timeout
+// from config, supporting both the new key (node.ephemeral.inactivity_timeout)
+// and the old key (ephemeral_node_inactivity_timeout) for backwards compatibility.
+//
+// We cannot use viper.RegisterAlias here because aliases silently ignore
+// config values set under the alias name. If a user writes the new key in
+// their config file, RegisterAlias redirects reads to the old key (which
+// has no config value), returning only the default and discarding the
+// user's setting.
+func resolveEphemeralInactivityTimeout() time.Duration {
+	// New key takes precedence if explicitly set in config.
+	if viper.IsSet("node.ephemeral.inactivity_timeout") &&
+		viper.GetString("node.ephemeral.inactivity_timeout") != "" {
+		return viper.GetDuration("node.ephemeral.inactivity_timeout")
+	}
+
+	// Fall back to old key for backwards compatibility.
+	if viper.IsSet("ephemeral_node_inactivity_timeout") {
+		return viper.GetDuration("ephemeral_node_inactivity_timeout")
+	}
+
+	// Default
+	return viper.GetDuration("node.ephemeral.inactivity_timeout")
+}
+
+// resolveNodeExpiry parses the node.expiry config value.
+// Returns 0 if set to "0" (no default expiry) or on parse failure.
+func resolveNodeExpiry() time.Duration {
+	value := viper.GetString("node.expiry")
+	if value == "" || value == "0" {
+		return 0
+	}
+
+	expiry, err := model.ParseDuration(value)
+	if err != nil {
+		log.Warn().
+			Str("value", value).
+			Msg("failed to parse node.expiry, defaulting to no expiry")
+
+		return 0
+	}
+
+	return time.Duration(expiry)
 }
 
 func validateServerConfig() error {
@@ -459,8 +587,27 @@ func validateServerConfig() error {
 	depr.fatal("oidc.strip_email_domain")
 	depr.fatal("oidc.map_legacy_users")
 
-	if viper.GetBool("oidc.enabled") {
-		err := validatePKCEMethod(viper.GetString("oidc.pkce.method"))
+	// Removed since v0.29.0: `randomize_client_port` moved to the ACL
+	// policy as a top-level `randomizeClientPort` field, matching the
+	// Tailscale-hosted control plane schema. Per-node `nodeAttrs`
+	// entries granting `https://tailscale.com/cap/randomize-client-port`
+	// also work.
+	depr.fatalWithHint("randomize_client_port",
+		`Set "randomizeClientPort": true at the top level of your policy file `+
+			`(see policy.path / policy.mode), or grant the cap per-node via a `+
+			`"nodeAttrs" entry. See CHANGELOG.md (BREAKING / Configuration).`)
+
+	// Deprecated: ephemeral_node_inactivity_timeout -> node.ephemeral.inactivity_timeout
+	depr.warnNoAlias("node.ephemeral.inactivity_timeout", "ephemeral_node_inactivity_timeout")
+
+	// Removed: oidc.expiry -> node.expiry
+	depr.fatalIfSet("oidc.expiry", "node.expiry")
+
+	// OIDC is activated by setting oidc.issuer (see app.go), not by a
+	// dedicated oidc.enabled key. Gate validation on the real activation
+	// condition so a misconfiguration fails at startup.
+	if viper.GetString("oidc.issuer") != "" {
+		err := validateOIDCConfig()
 		if err != nil {
 			return err
 		}
@@ -507,10 +654,12 @@ func validateServerConfig() error {
 	// Minimum inactivity time out is keepalive timeout (60s) plus a few seconds
 	// to avoid races
 	minInactivityTimeout, _ := time.ParseDuration("65s")
-	if viper.GetDuration("ephemeral_node_inactivity_timeout") <= minInactivityTimeout {
+
+	ephemeralTimeout := resolveEphemeralInactivityTimeout()
+	if ephemeralTimeout <= minInactivityTimeout {
 		errorText += fmt.Sprintf(
-			"Fatal config error: ephemeral_node_inactivity_timeout (%s) is set too low, must be more than %s",
-			viper.GetString("ephemeral_node_inactivity_timeout"),
+			"Fatal config error: node.ephemeral.inactivity_timeout (%s) is set too low, must be more than %s",
+			ephemeralTimeout,
 			minInactivityTimeout,
 		)
 	}
@@ -518,6 +667,34 @@ func validateServerConfig() error {
 	if viper.GetBool("dns.override_local_dns") {
 		if global := viper.GetStringSlice("dns.nameservers.global"); len(global) == 0 {
 			errorText += "Fatal config error: dns.nameservers.global must be set when dns.override_local_dns is true\n"
+		}
+	}
+
+	// Validate HA health probing parameters
+	if haInterval := viper.GetDuration(
+		"node.routes.ha.probe_interval",
+	); haInterval > 0 {
+		if haInterval < 2*time.Second {
+			errorText += fmt.Sprintf(
+				"Fatal config error: node.routes.ha.probe_interval (%s) must be >= 2s\n",
+				haInterval,
+			)
+		}
+
+		haTimeout := viper.GetDuration("node.routes.ha.probe_timeout")
+		if haTimeout < 1*time.Second {
+			errorText += fmt.Sprintf(
+				"Fatal config error: node.routes.ha.probe_timeout (%s) must be >= 1s\n",
+				haTimeout,
+			)
+		}
+
+		if haTimeout >= haInterval {
+			errorText += fmt.Sprintf(
+				"Fatal config error: node.routes.ha.probe_timeout (%s) must be less than node.routes.ha.probe_interval (%s)\n",
+				haTimeout,
+				haInterval,
+			)
 		}
 	}
 
@@ -586,8 +763,8 @@ func derpConfig() DERPConfig {
 
 	urlStrs := viper.GetStringSlice("derp.urls")
 
-	urls := make([]url.URL, len(urlStrs))
-	for index, urlStr := range urlStrs {
+	urls := make([]url.URL, 0, len(urlStrs))
+	for _, urlStr := range urlStrs {
 		urlAddr, err := url.Parse(urlStr)
 		if err != nil {
 			log.Error().
@@ -595,9 +772,11 @@ func derpConfig() DERPConfig {
 				Str("url", urlStr).
 				Err(err).
 				Msg("Failed to parse url, ignoring...")
+
+			continue
 		}
 
-		urls[index] = *urlAddr
+		urls = append(urls, *urlAddr)
 	}
 
 	paths := viper.GetStringSlice("derp.paths")
@@ -878,7 +1057,7 @@ func warnBanner(lines []string) {
 	b.WriteString("###                                                          ###\n")
 
 	for _, line := range lines {
-		b.WriteString(fmt.Sprintf("###  %-54s  ###\n", line))
+		fmt.Fprintf(&b, "###  %-54s  ###\n", line)
 	}
 
 	b.WriteString("###                                                          ###\n")
@@ -926,6 +1105,31 @@ func prefixV6() (*netip.Prefix, bool, error) {
 	return &prefixV6, !ipSet.ContainsPrefix(prefixV6), nil
 }
 
+// trustedProxies rejects 0.0.0.0/0 and ::/0 because they defeat the
+// peer-trust gate and almost always indicate misconfiguration.
+func trustedProxies() ([]netip.Prefix, error) {
+	raw := viper.GetStringSlice("trusted_proxies")
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	out := make([]netip.Prefix, 0, len(raw))
+	for i, s := range raw {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			return nil, fmt.Errorf("trusted_proxies[%d] %q: %w", i, s, err)
+		}
+
+		if p.Bits() == 0 {
+			return nil, fmt.Errorf("trusted_proxies[%d] %q: %w", i, s, errTrustedProxyZeroRange)
+		}
+
+		out = append(out, p.Masked())
+	}
+
+	return out, nil
+}
+
 // LoadCLIConfig returns the needed configuration for the CLI client
 // of Headscale to connect to a Headscale server.
 func LoadCLIConfig() (*Config, error) {
@@ -961,6 +1165,11 @@ func LoadServerConfig() (*Config, error) {
 	}
 
 	prefix6, v6NonStandard, err := prefixV6()
+	if err != nil {
+		return nil, err
+	}
+
+	trusted, err := trustedProxies()
 	if err != nil {
 		return nil, err
 	}
@@ -1016,7 +1225,6 @@ func LoadServerConfig() (*Config, error) {
 
 	derpConfig := derpConfig()
 	logTailConfig := logtailConfig()
-	randomizeClientPort := viper.GetBool("randomize_client_port")
 
 	oidcClientSecret := viper.GetString("oidc.client_secret")
 
@@ -1056,6 +1264,7 @@ func LoadServerConfig() (*Config, error) {
 		MetricsAddr:        viper.GetString("metrics_listen_addr"),
 		GRPCAddr:           viper.GetString("grpc_listen_addr"),
 		GRPCAllowInsecure:  viper.GetBool("grpc_allow_insecure"),
+		TrustedProxies:     trusted,
 		DisableUpdateCheck: false,
 
 		PrefixV4:     prefix4,
@@ -1069,9 +1278,18 @@ func LoadServerConfig() (*Config, error) {
 
 		DERP: derpConfig,
 
-		EphemeralNodeInactivityTimeout: viper.GetDuration(
-			"ephemeral_node_inactivity_timeout",
-		),
+		Node: NodeConfig{
+			Expiry: resolveNodeExpiry(),
+			Ephemeral: EphemeralConfig{
+				InactivityTimeout: resolveEphemeralInactivityTimeout(),
+			},
+			Routes: RouteConfig{
+				HA: HARouteConfig{
+					ProbeInterval: viper.GetDuration("node.routes.ha.probe_interval"),
+					ProbeTimeout:  viper.GetDuration("node.routes.ha.probe_timeout"),
+				},
+			},
+		},
 
 		Database: databaseConfig(),
 
@@ -1104,32 +1322,19 @@ func LoadServerConfig() (*Config, error) {
 			AllowedUsers:          viper.GetStringSlice("oidc.allowed_users"),
 			AllowedGroups:         viper.GetStringSlice("oidc.allowed_groups"),
 			EmailVerifiedRequired: viper.GetBool("oidc.email_verified_required"),
-			Expiry: func() time.Duration {
-				// if set to 0, we assume no expiry
-				if value := viper.GetString("oidc.expiry"); value == "0" {
-					return maxDuration
-				} else {
-					expiry, err := model.ParseDuration(value)
-					if err != nil {
-						log.Warn().Msg("failed to parse oidc.expiry, defaulting back to 180 days")
-
-						return defaultOIDCExpiryTime
-					}
-
-					return time.Duration(expiry)
-				}
-			}(),
-			UseExpiryFromToken: viper.GetBool("oidc.use_expiry_from_token"),
+			UseExpiryFromToken:    viper.GetBool("oidc.use_expiry_from_token"),
 			PKCE: PKCEConfig{
 				Enabled: viper.GetBool("oidc.pkce.enabled"),
 				Method:  viper.GetString("oidc.pkce.method"),
 			},
 		},
 
-		LogTail:             logTailConfig,
-		RandomizeClientPort: randomizeClientPort,
+		LogTail: logTailConfig,
 		Taildrop: TaildropConfig{
 			Enabled: viper.GetBool("taildrop.enabled"),
+		},
+		AutoUpdate: AutoUpdateConfig{
+			Enabled: viper.GetBool("auto_update.enabled"),
 		},
 
 		Policy: policyConfig(),
@@ -1156,8 +1361,8 @@ func LoadServerConfig() (*Config, error) {
 
 				return DefaultBatcherWorkers()
 			}(),
-			RegisterCacheCleanup:    viper.GetDuration("tuning.register_cache_cleanup"),
 			RegisterCacheExpiration: viper.GetDuration("tuning.register_cache_expiration"),
+			RegisterCacheMaxEntries: viper.GetInt("tuning.register_cache_max_entries"),
 			NodeStoreBatchSize:      viper.GetInt("tuning.node_store_batch_size"),
 			NodeStoreBatchTimeout:   viper.GetDuration("tuning.node_store_batch_timeout"),
 		},
@@ -1237,6 +1442,22 @@ func (d *deprecator) fatal(oldKey string) {
 	}
 }
 
+// fatalWithHint behaves like fatal but appends a remediation pointer to
+// the message so operators see exactly what to do without leaving the
+// terminal. Use it when the removed key has a clean replacement on the
+// policy side.
+func (d *deprecator) fatalWithHint(oldKey, hint string) {
+	if viper.IsSet(oldKey) {
+		d.fatals.Add(
+			fmt.Sprintf(
+				"The %q configuration key has been removed. %s",
+				oldKey,
+				hint,
+			),
+		)
+	}
+}
+
 // fatalIfNewKeyIsNotUsed deprecates and adds an entry to the fatal list of options if the oldKey is set and the new key is _not_ set.
 // If the new key is set, a warning is emitted instead.
 func (d *deprecator) fatalIfNewKeyIsNotUsed(newKey, oldKey string) {
@@ -1251,6 +1472,21 @@ func (d *deprecator) fatalIfNewKeyIsNotUsed(newKey, oldKey string) {
 		)
 	} else if viper.IsSet(oldKey) {
 		d.warns.Add(fmt.Sprintf("The %q configuration key is deprecated. Please use %q instead. %q has been removed.", oldKey, newKey, oldKey))
+	}
+}
+
+// fatalIfSet fatals if the oldKey is set at all, regardless of whether
+// the newKey is set. Use this when the old key has been fully removed
+// and any use of it should be a hard error.
+func (d *deprecator) fatalIfSet(oldKey, newKey string) {
+	if viper.IsSet(oldKey) {
+		d.fatals.Add(
+			fmt.Sprintf(
+				"The %q configuration key has been removed. Please use %q instead.",
+				oldKey,
+				newKey,
+			),
+		)
 	}
 }
 
@@ -1303,5 +1539,35 @@ func (d *deprecator) Log() {
 		log.Fatal().Msg("\n" + d.String())
 	} else if len(d.warns) > 0 {
 		log.Warn().Msg("\n" + d.String())
+	}
+}
+
+// tailcfgDNSMu guards concurrent access to the mutable ExtraRecords of
+// [Config.TailcfgDNSConfig] between the extra-records file watcher (writer)
+// and the per-client map builds that clone it (readers). It is a package-level
+// lock so [Config] stays freely copyable during construction.
+var tailcfgDNSMu sync.RWMutex
+
+// CloneTailcfgDNSConfig returns a deep copy of [Config.TailcfgDNSConfig], or
+// nil if none is set. Safe for concurrent use with [Config.SetExtraRecords].
+func (c *Config) CloneTailcfgDNSConfig() *tailcfg.DNSConfig {
+	tailcfgDNSMu.RLock()
+	defer tailcfgDNSMu.RUnlock()
+
+	if c.TailcfgDNSConfig == nil {
+		return nil
+	}
+
+	return c.TailcfgDNSConfig.Clone()
+}
+
+// SetExtraRecords replaces the ExtraRecords of [Config.TailcfgDNSConfig]. Safe
+// for concurrent use with [Config.CloneTailcfgDNSConfig].
+func (c *Config) SetExtraRecords(records []tailcfg.DNSRecord) {
+	tailcfgDNSMu.Lock()
+	defer tailcfgDNSMu.Unlock()
+
+	if c.TailcfgDNSConfig != nil {
+		c.TailcfgDNSConfig.ExtraRecords = records
 	}
 }

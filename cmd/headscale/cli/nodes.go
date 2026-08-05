@@ -110,9 +110,9 @@ var registerNodeCmd = &cobra.Command{
 }
 
 var listNodesCmd = &cobra.Command{
-	Use:     "list",
+	Use:     cmdList,
 	Short:   "List nodes",
-	Aliases: []string{"ls", "show"},
+	Aliases: []string{"ls", cmdShow},
 	RunE: grpcRunE(func(ctx context.Context, client v1.HeadscaleServiceClient, cmd *cobra.Command, args []string) error {
 		user, _ := cmd.Flags().GetString("user")
 
@@ -122,7 +122,7 @@ var listNodesCmd = &cobra.Command{
 		}
 
 		return printListOutput(cmd, response.GetNodes(), func() error {
-			tableData, err := nodesToPtables(user, response.GetNodes())
+			tableData, err := nodesToPtables(response.GetNodes())
 			if err != nil {
 				return fmt.Errorf("converting to table: %w", err)
 			}
@@ -182,12 +182,12 @@ var listNodeRoutesCmd = &cobra.Command{
 }
 
 var expireNodeCmd = &cobra.Command{
-	Use:   "expire",
+	Use:   cmdExpire,
 	Short: "Expire (log out) a node in your network",
 	Long: `Expiring a node will keep the node in the database and force it to reauthenticate.
 
 Use --disable to disable key expiry (node will never expire).`,
-	Aliases: []string{"logout", "exp", "e"},
+	Aliases: []string{"logout", aliasExp, "e"},
 	RunE: grpcRunE(func(ctx context.Context, client v1.HeadscaleServiceClient, cmd *cobra.Command, args []string) error {
 		identifier, _ := cmd.Flags().GetUint64("identifier")
 		disableExpiry, _ := cmd.Flags().GetBool("disable")
@@ -212,8 +212,10 @@ Use --disable to disable key expiry (node will never expire).`,
 		now := time.Now()
 
 		expiryTime := now
+
 		if expiry != "" {
 			var err error
+
 			expiryTime, err = time.Parse(time.RFC3339, expiry)
 			if err != nil {
 				return fmt.Errorf("parsing expiry time: %w", err)
@@ -264,9 +266,9 @@ var renameNodeCmd = &cobra.Command{
 }
 
 var deleteNodeCmd = &cobra.Command{
-	Use:     "delete",
+	Use:     cmdDelete,
 	Short:   "Delete a node",
-	Aliases: []string{"del"},
+	Aliases: []string{aliasDel},
 	RunE: grpcRunE(func(ctx context.Context, client v1.HeadscaleServiceClient, cmd *cobra.Command, args []string) error {
 		identifier, _ := cmd.Flags().GetUint64("identifier")
 
@@ -287,7 +289,7 @@ var deleteNodeCmd = &cobra.Command{
 			"Do you want to remove the node %s?",
 			getResponse.GetNode().GetName(),
 		)) {
-			return printOutput(cmd, map[string]string{"Result": "Node not deleted"}, "Node not deleted")
+			return printOutput(cmd, map[string]string{colResult: "Node not deleted"}, "Node not deleted")
 		}
 
 		_, err = client.DeleteNode(ctx, deleteRequest)
@@ -297,7 +299,7 @@ var deleteNodeCmd = &cobra.Command{
 
 		return printOutput(
 			cmd,
-			map[string]string{"Result": "Node deleted"},
+			map[string]string{colResult: "Node deleted"},
 			"Node deleted",
 		)
 	}),
@@ -339,10 +341,7 @@ be assigned to nodes.`,
 	},
 }
 
-func nodesToPtables(
-	currentUser string,
-	nodes []*v1.Node,
-) (pterm.TableData, error) {
+func nodesToPtables(nodes []*v1.Node) (pterm.TableData, error) {
 	tableHeader := []string{
 		"ID",
 		"Hostname",
@@ -354,11 +353,12 @@ func nodesToPtables(
 		"IP addresses",
 		"Ephemeral",
 		"Last seen",
-		"Expiration",
+		colExpiration,
 		"Connected",
 		"Expired",
 	}
-	tableData := pterm.TableData{tableHeader}
+	tableData := make(pterm.TableData, 1, 1+len(nodes))
+	tableData[0] = tableHeader
 
 	for _, node := range nodes {
 		var ephemeral bool
@@ -434,6 +434,7 @@ func nodesToPtables(
 		}
 
 		var ipBuilder strings.Builder
+
 		for _, addr := range node.GetIpAddresses() {
 			ip, err := netip.ParseAddr(addr)
 			if err == nil {
@@ -561,7 +562,8 @@ func nodeRoutesToPtables(
 		"Available",
 		"Serving (Primary)",
 	}
-	tableData := pterm.TableData{tableHeader}
+	tableData := make(pterm.TableData, 1, 1+len(nodes))
+	tableData[0] = tableHeader
 
 	for _, node := range nodes {
 		nodeData := []string{

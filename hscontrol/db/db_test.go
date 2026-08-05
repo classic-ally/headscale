@@ -8,13 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
-	"zgo.at/zcache/v2"
 )
 
 // TestSQLiteMigrationAndDataValidation tests specific SQLite migration scenarios
@@ -124,7 +122,7 @@ func TestSQLiteMigrationAndDataValidation(t *testing.T) {
 				// Expected: tags = ["tag:server"] (no duplicates)
 				node4 := findNode("node4")
 				require.NotNil(t, node4, "node4 should exist")
-				assert.Equal(t, []string{"tag:server"}, node4.Tags, "node4 should have tag:server without duplicates")
+				assert.Equal(t, []string{"tag:server"}, node4.Tags.List(), "node4 should have tag:server without duplicates") //nolint:goconst // descriptive test assertions read better with the literal inline
 
 				// Node 5: user2 has no RequestTags
 				// Expected: tags = [] (unchanged)
@@ -146,6 +144,215 @@ func TestSQLiteMigrationAndDataValidation(t *testing.T) {
 				assert.NotContains(t, node7.Tags, "tag:forbidden", "node7 should NOT have tag:forbidden (unauthorized)")
 			},
 		},
+		// Test for the zero-time node expiry migration
+		// (202605221435-clear-zero-time-node-expiry). Pre-0.28 versions
+		// stored a zero time.Time as '0001-01-01 00:00:00+00:00' rather
+		// than NULL, which caused 0.29 to report those nodes as expired.
+		// Fixes: https://github.com/juanfont/headscale/issues/3284
+		{
+			dbPath: "testdata/sqlite/zero_time_expiry_migration_test.sql",
+			wantFunc: func(t *testing.T, hsdb *HSDatabase) {
+				t.Helper()
+
+				nodes, err := Read(hsdb.DB, func(rx *gorm.DB) (types.Nodes, error) {
+					return ListNodes(rx)
+				})
+				require.NoError(t, err)
+				require.Len(t, nodes, 5, "should have all 5 nodes")
+
+				byHostname := make(map[string]*types.Node, len(nodes))
+				for _, n := range nodes {
+					byHostname[n.Hostname] = n
+				}
+
+				// Node 1 had a zero-time expiry; should be cleared.
+				node1 := byHostname["node1"]
+				require.NotNil(t, node1, "node1 should exist")
+				assert.Nil(t, node1.Expiry, "node1 zero-time expiry should be cleared to NULL")
+				assert.False(t, node1.IsExpired(), "node1 should not be reported as expired")
+
+				// Node 2 already had NULL expiry; should still be NULL.
+				node2 := byHostname["node2"]
+				require.NotNil(t, node2, "node2 should exist")
+				assert.Nil(t, node2.Expiry, "node2 NULL expiry should be preserved")
+				assert.False(t, node2.IsExpired(), "node2 should not be reported as expired")
+
+				// Node 3 had a real future expiry; should be preserved.
+				node3 := byHostname["node3"]
+				require.NotNil(t, node3, "node3 should exist")
+				require.NotNil(t, node3.Expiry, "node3 future expiry should be preserved")
+				assert.Equal(t, 2099, node3.Expiry.UTC().Year(), "node3 expiry year should be 2099")
+				assert.False(t, node3.IsExpired(), "node3 with future expiry should not be expired")
+
+				// Node 4 had a real past expiry; should be preserved.
+				node4 := byHostname["node4"]
+				require.NotNil(t, node4, "node4 should exist")
+				require.NotNil(t, node4.Expiry, "node4 past expiry should be preserved")
+				assert.Equal(t, 2020, node4.Expiry.UTC().Year(), "node4 expiry year should be 2020")
+				assert.True(t, node4.IsExpired(), "node4 with past expiry should still be expired")
+
+				// Node 5 also had a zero-time expiry; should be cleared.
+				node5 := byHostname["node5"]
+				require.NotNil(t, node5, "node5 should exist")
+				assert.Nil(t, node5.Expiry, "node5 zero-time expiry should be cleared to NULL")
+				assert.False(t, node5.IsExpired(), "node5 should not be reported as expired")
+			},
+		},
+		// Test for the clear-tagged-node-user-id migration
+		// (202602201200-clear-tagged-node-user-id). A nil tags slice
+		// marshals to the JSON literal 'null', so untagged nodes can carry
+		// tags='null' in the database. The migration must only clear
+		// user_id on genuinely tagged nodes, not on these untagged ones.
+		// Fixes: https://github.com/juanfont/headscale/issues/3323
+		{
+			dbPath: "testdata/sqlite/null_tags_user_id_migration_test.sql",
+			wantFunc: func(t *testing.T, hsdb *HSDatabase) {
+				t.Helper()
+
+				nodes, err := Read(hsdb.DB, func(rx *gorm.DB) (types.Nodes, error) {
+					return ListNodes(rx)
+				})
+				require.NoError(t, err)
+				require.Len(t, nodes, 4, "should have all 4 nodes")
+
+				byHostname := make(map[string]*types.Node, len(nodes))
+				for _, n := range nodes {
+					byHostname[n.Hostname] = n
+				}
+
+				// Node 1 had tags='null' (untagged) and belonged to user2.
+				// The migration must NOT clear its user_id.
+				node1 := byHostname["node1"]
+				require.NotNil(t, node1, "node1 should exist")
+				assert.False(t, node1.IsTagged(), "node1 with tags='null' should be untagged")
+				require.NotNil(t, node1.UserID, "node1 should keep its user assigned")
+				assert.Equal(t, uint(2), *node1.UserID, "node1 should still belong to user2")
+
+				// Node 2 is genuinely tagged; user_id must be cleared.
+				node2 := byHostname["node2"]
+				require.NotNil(t, node2, "node2 should exist")
+				assert.True(t, node2.IsTagged(), "node2 should be tagged")
+				assert.Nil(t, node2.UserID, "node2 (tagged) should have user_id cleared")
+
+				// Node 3 had tags='[]' (untagged); user_id preserved.
+				node3 := byHostname["node3"]
+				require.NotNil(t, node3, "node3 should exist")
+				assert.False(t, node3.IsTagged(), "node3 with tags='[]' should be untagged")
+				require.NotNil(t, node3.UserID, "node3 should keep its user assigned")
+				assert.Equal(t, uint(1), *node3.UserID, "node3 should still belong to user1")
+
+				// Node 4 had tags='' (untagged); user_id preserved.
+				node4 := byHostname["node4"]
+				require.NotNil(t, node4, "node4 should exist")
+				assert.False(t, node4.IsTagged(), "node4 with tags='' should be untagged")
+				require.NotNil(t, node4.UserID, "node4 should keep its user assigned")
+				assert.Equal(t, uint(1), *node4.UserID, "node4 should still belong to user1")
+			},
+		},
+		// Test for the null-tags user_id recovery migration. Databases that
+		// already upgraded to 0.29.0 had user_id wrongly cleared on untagged
+		// nodes with tags='null'. The recovery migration re-derives user_id
+		// from the node's pre-auth key where one exists.
+		// Fixes: https://github.com/juanfont/headscale/issues/3323
+		{
+			dbPath: "testdata/sqlite/recover_null_tags_user_id_migration_test.sql",
+			wantFunc: func(t *testing.T, hsdb *HSDatabase) {
+				t.Helper()
+
+				nodes, err := Read(hsdb.DB, func(rx *gorm.DB) (types.Nodes, error) {
+					return ListNodes(rx)
+				})
+				require.NoError(t, err)
+				require.Len(t, nodes, 4, "should have all 4 nodes")
+
+				byHostname := make(map[string]*types.Node, len(nodes))
+				for _, n := range nodes {
+					byHostname[n.Hostname] = n
+				}
+
+				// Node 1: authkey-registered, orphaned by the bug. The recovery
+				// migration restores user_id from its pre-auth key (user2).
+				node1 := byHostname["node1"]
+				require.NotNil(t, node1, "node1 should exist")
+				require.NotNil(t, node1.UserID, "node1 user_id should be recovered")
+				assert.Equal(t, uint(2), *node1.UserID, "node1 should be recovered to user2")
+
+				// Node 2: genuinely tagged, correctly cleared. Must stay cleared.
+				node2 := byHostname["node2"]
+				require.NotNil(t, node2, "node2 should exist")
+				assert.True(t, node2.IsTagged(), "node2 should be tagged")
+				assert.Nil(t, node2.UserID, "node2 (tagged) must remain cleared")
+
+				// Node 3: CLI-registered, no pre-auth key. Unrecoverable.
+				node3 := byHostname["node3"]
+				require.NotNil(t, node3, "node3 should exist")
+				assert.Nil(t, node3.UserID, "node3 has no pre-auth key to recover from")
+
+				// Node 4: never orphaned; user_id must be untouched.
+				node4 := byHostname["node4"]
+				require.NotNil(t, node4, "node4 should exist")
+				require.NotNil(t, node4.UserID, "node4 user_id should be untouched")
+				assert.Equal(t, uint(1), *node4.UserID, "node4 should still belong to user1")
+			},
+		},
+		// Test for the clear-tagged-node-expiry migration
+		// (202607241200-clear-tagged-node-expiry). A buggy handleLogout stamped
+		// a key expiry on tagged nodes, which never expire (KB 1068), leaving
+		// them permanently Expired. The migration clears expiry on tagged rows
+		// only, preserving user-owned nodes' expiry.
+		// Fixes: https://github.com/juanfont/headscale/issues/3371
+		{
+			dbPath: "testdata/sqlite/clear_tagged_node_expiry_migration_test.sql",
+			wantFunc: func(t *testing.T, hsdb *HSDatabase) {
+				t.Helper()
+
+				nodes, err := Read(hsdb.DB, func(rx *gorm.DB) (types.Nodes, error) {
+					return ListNodes(rx)
+				})
+				require.NoError(t, err)
+				require.Len(t, nodes, 5, "should have all 5 nodes")
+
+				byHostname := make(map[string]*types.Node, len(nodes))
+				for _, n := range nodes {
+					byHostname[n.Hostname] = n
+				}
+
+				// Node 1: tagged with a stale PAST expiry (the bug). Cleared.
+				node1 := byHostname["node1"]
+				require.NotNil(t, node1, "node1 should exist")
+				assert.True(t, node1.IsTagged(), "node1 should be tagged")
+				assert.Nil(t, node1.Expiry, "node1 (tagged) stale expiry should be cleared")
+				assert.False(t, node1.IsExpired(), "node1 must not be reported expired")
+
+				// Node 2: tagged with a FUTURE expiry. Tagged nodes never expire,
+				// so this is cleared too.
+				node2 := byHostname["node2"]
+				require.NotNil(t, node2, "node2 should exist")
+				assert.True(t, node2.IsTagged(), "node2 should be tagged")
+				assert.Nil(t, node2.Expiry, "node2 (tagged) expiry should be cleared")
+
+				// Node 3: tagged, expiry already NULL. Stays NULL.
+				node3 := byHostname["node3"]
+				require.NotNil(t, node3, "node3 should exist")
+				assert.True(t, node3.IsTagged(), "node3 should be tagged")
+				assert.Nil(t, node3.Expiry, "node3 (tagged) NULL expiry should be preserved")
+
+				// Node 4: untagged (tags='null') with a PAST expiry. PRESERVED —
+				// the migration must not touch user-owned nodes.
+				node4 := byHostname["node4"]
+				require.NotNil(t, node4, "node4 should exist")
+				assert.False(t, node4.IsTagged(), "node4 (tags='null') should be untagged")
+				require.NotNil(t, node4.Expiry, "node4 (user-owned) expiry must be preserved")
+				assert.Equal(t, 2020, node4.Expiry.UTC().Year(), "node4 past expiry preserved")
+
+				// Node 5: untagged (tags='[]') with a FUTURE expiry. PRESERVED.
+				node5 := byHostname["node5"]
+				require.NotNil(t, node5, "node5 should exist")
+				assert.False(t, node5.IsTagged(), "node5 (tags='[]') should be untagged")
+				require.NotNil(t, node5.Expiry, "node5 (user-owned) expiry must be preserved")
+				assert.Equal(t, 2099, node5.Expiry.UTC().Year(), "node5 future expiry preserved")
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -160,10 +367,6 @@ func TestSQLiteMigrationAndDataValidation(t *testing.T) {
 			}
 		})
 	}
-}
-
-func emptyCache() *zcache.Cache[types.AuthID, types.AuthRequest] {
-	return zcache.New[types.AuthID, types.AuthRequest](time.Minute, time.Hour)
 }
 
 func createSQLiteFromSQLFile(sqlFilePath, dbPath string) error {
@@ -379,7 +582,6 @@ func dbForTestWithPath(t *testing.T, sqlFilePath string) *HSDatabase {
 				Mode: types.PolicyModeDB,
 			},
 		},
-		emptyCache(),
 	)
 	if err != nil {
 		t.Fatalf("setting up database: %s", err)
@@ -439,7 +641,6 @@ func TestSQLiteAllTestdataMigrations(t *testing.T) {
 						Mode: types.PolicyModeDB,
 					},
 				},
-				emptyCache(),
 			)
 			require.NoError(t, err)
 		})

@@ -13,6 +13,7 @@ import (
 
 	v1 "github.com/juanfont/headscale/gen/go/headscale/v1"
 	"github.com/juanfont/headscale/integration/hsic"
+	"github.com/juanfont/headscale/integration/integrationutil"
 	"github.com/juanfont/headscale/integration/tsic"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,7 +63,7 @@ func TestAPIAuthenticationBypass(t *testing.T) {
 		assert.NoError(ct, err)
 		assert.NotEmpty(ct, apiKeyOutput)
 		validAPIKey = strings.TrimSpace(apiKeyOutput)
-	}, 20*time.Second, 1*time.Second)
+	}, integrationutil.ScaledTimeout(20*time.Second), 1*time.Second)
 
 	// Get the API endpoint
 	endpoint := headscale.GetEndpoint()
@@ -521,8 +522,8 @@ func TestGRPCAuthenticationBypass(t *testing.T) {
 		require.NoError(t, err,
 			"gRPC connection with valid API key should succeed, output: %s", output)
 
-		// CLI outputs the users array directly, not wrapped in ListUsersResponse
-		// Parse as JSON array (CLI uses json.Marshal, not protojson)
+		// CLI outputs the users array directly, not wrapped in [v1.ListUsersResponse]
+		// Parse as JSON array (CLI uses [json.Marshal], not protojson)
 		var users []*v1.User
 
 		err = json.Unmarshal([]byte(output), &users)
@@ -680,8 +681,8 @@ cli:
 		require.NoError(t, err,
 			"CLI with valid API key should succeed")
 
-		// CLI outputs the users array directly, not wrapped in ListUsersResponse
-		// Parse as JSON array (CLI uses json.Marshal, not protojson)
+		// CLI outputs the users array directly, not wrapped in [v1.ListUsersResponse]
+		// Parse as JSON array (CLI uses [json.Marshal], not protojson)
 		var users []*v1.User
 
 		err = json.Unmarshal([]byte(output), &users)

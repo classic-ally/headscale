@@ -24,7 +24,6 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 	"gorm.io/gorm/schema"
-	"zgo.at/zcache/v2"
 )
 
 //go:embed schema.sql
@@ -45,19 +44,15 @@ const (
 )
 
 type HSDatabase struct {
-	DB       *gorm.DB
-	cfg      *types.Config
-	regCache *zcache.Cache[types.AuthID, types.AuthRequest]
+	DB  *gorm.DB
+	cfg *types.Config
 }
 
 // NewHeadscaleDatabase creates a new database connection and runs migrations.
 // It accepts the full configuration to allow migrations access to policy settings.
 //
 //nolint:gocyclo // complex database initialization with many migrations
-func NewHeadscaleDatabase(
-	cfg *types.Config,
-	regCache *zcache.Cache[types.AuthID, types.AuthRequest],
-) (*HSDatabase, error) {
+func NewHeadscaleDatabase(cfg *types.Config) (*HSDatabase, error) {
 	dbConn, err := openDB(cfg.Database)
 	if err != nil {
 		return nil, err
@@ -781,7 +776,7 @@ CREATE TABLE IF NOT EXISTS node_wg_peer_connections(
 							continue
 						}
 
-						mergedTags := append(existingTags, validatedTags...)
+						mergedTags := append(slices.Clone(existingTags), validatedTags...)
 						slices.Sort(mergedTags)
 						mergedTags = slices.Compact(mergedTags)
 
@@ -815,13 +810,20 @@ CREATE TABLE IF NOT EXISTS node_wg_peer_connections(
 				// but this prevents deleting users whose nodes have been
 				// tagged, and the ON DELETE CASCADE FK would destroy the
 				// tagged nodes if the user were deleted.
+				//
+				// A nil tags slice marshals to the JSON literal 'null', so
+				// untagged nodes can carry tags='null'. That spelling must be
+				// excluded alongside '[]' and '' or untagged nodes lose their
+				// user. Nodes already detached by the earlier version of this
+				// migration are repaired by the recovery migration below.
 				// Fixes: https://github.com/juanfont/headscale/issues/3077
+				// Fixes: https://github.com/juanfont/headscale/issues/3323
 				ID: "202602201200-clear-tagged-node-user-id",
 				Migrate: func(tx *gorm.DB) error {
 					err := tx.Exec(`
 UPDATE nodes
 SET user_id = NULL
-WHERE tags IS NOT NULL AND tags != '[]' AND tags != '';
+WHERE tags IS NOT NULL AND tags != '[]' AND tags != '' AND tags != 'null';
 						`).Error
 					if err != nil {
 						return fmt.Errorf("clearing user_id on tagged nodes: %w", err)
@@ -834,40 +836,88 @@ WHERE tags IS NOT NULL AND tags != '[]' AND tags != '';
 			{
 				ID: "202603311400-add-domains-tables",
 				Migrate: func(tx *gorm.DB) error {
-					if err := tx.Exec(`
-CREATE TABLE domains(
-  id integer PRIMARY KEY AUTOINCREMENT,
-  domain text NOT NULL,
-  node_id integer,
-  provider text,
-  api_token text,
-  verified numeric DEFAULT false,
-  verify_token text,
-  created_at datetime,
-  CONSTRAINT fk_domains_node FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
-)`).Error; err != nil {
-						return fmt.Errorf("creating domains table: %w", err)
+					err := createDomainTables(tx)
+					if err != nil {
+						return err
 					}
 
-					if err := tx.Exec(`CREATE UNIQUE INDEX idx_domains_domain ON domains(domain)`).Error; err != nil {
-						return fmt.Errorf("creating domains unique index: %w", err)
+					return createDomainIndexes(tx)
+				},
+				Rollback: func(db *gorm.DB) error { return nil },
+			},
+			{
+				// Clear zero-time node expiry values to NULL.
+				// Versions before 0.28 persisted a pointer to a zero
+				// time.Time as '0001-01-01 00:00:00+00:00' rather than
+				// NULL, which 0.29 reports as an expired node. This
+				// normalises the existing rows so the column once
+				// again means "no expiry" when unset.
+				ID: "202605221435-clear-zero-time-node-expiry",
+				Migrate: func(tx *gorm.DB) error {
+					err := tx.Exec(`
+UPDATE nodes
+SET expiry = NULL
+WHERE expiry IS NOT NULL AND expiry < '1900-01-01';
+						`).Error
+					if err != nil {
+						return fmt.Errorf("clearing zero-time node expiry: %w", err)
 					}
 
-					if err := tx.Exec(`
-CREATE TABLE domain_access(
-  id integer PRIMARY KEY AUTOINCREMENT,
-  domain_id integer NOT NULL,
-  user_id integer NOT NULL,
-  role text NOT NULL DEFAULT 'user',
-  created_at datetime,
-  CONSTRAINT fk_domain_access_domain FOREIGN KEY(domain_id) REFERENCES domains(id) ON DELETE CASCADE,
-  CONSTRAINT fk_domain_access_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-)`).Error; err != nil {
-						return fmt.Errorf("creating domain_access table: %w", err)
+					return nil
+				},
+				Rollback: func(db *gorm.DB) error { return nil },
+			},
+			{
+				// Recover user_id on untagged nodes detached by the earlier
+				// version of 202602201200-clear-tagged-node-user-id, which
+				// treated tags='null' as tagged and cleared the user. This
+				// repairs databases that already upgraded to 0.29.0; fresh
+				// upgrades are protected by the fixed migration above and find
+				// nothing to repair. Recovery is best-effort: the owner is
+				// re-derived from the node's pre-auth key, so nodes registered
+				// via CLI/OIDC (no pre-auth key) cannot be recovered and must
+				// be reassigned manually.
+				// Fixes: https://github.com/juanfont/headscale/issues/3323
+				ID: "202606181200-recover-null-tags-node-user-id",
+				Migrate: func(tx *gorm.DB) error {
+					err := tx.Exec(`
+UPDATE nodes
+SET user_id = (
+	SELECT pak.user_id FROM pre_auth_keys pak WHERE pak.id = nodes.auth_key_id
+)
+WHERE user_id IS NULL
+	AND auth_key_id IS NOT NULL
+	AND (tags IS NULL OR tags = '' OR tags = '[]' OR tags = 'null');
+						`).Error
+					if err != nil {
+						return fmt.Errorf("recovering user_id on untagged nodes: %w", err)
 					}
 
-					if err := tx.Exec(`CREATE UNIQUE INDEX idx_domain_access_unique ON domain_access(domain_id, user_id)`).Error; err != nil {
-						return fmt.Errorf("creating domain_access unique index: %w", err)
+					return nil
+				},
+				Rollback: func(db *gorm.DB) error { return nil },
+			},
+			{
+				// Clear stale key expiry on tagged nodes. A tagged node is
+				// owned by its tags and never expires (KB 1068), but a buggy
+				// handleLogout stamped a past expiry on it, leaving it
+				// permanently Expired and unable to re-authenticate. The
+				// buggy writer is fixed, so this only repairs rows written
+				// before the upgrade; a fixed server cannot recreate them.
+				// Match the tagged-node predicate the earlier
+				// clear-tagged-node-user-id migration uses (a nil tags slice
+				// marshals to 'null', so exclude it).
+				// Fixes: https://github.com/juanfont/headscale/issues/3371
+				ID: "202607241200-clear-tagged-node-expiry",
+				Migrate: func(tx *gorm.DB) error {
+					err := tx.Exec(`
+UPDATE nodes
+SET expiry = NULL
+WHERE tags IS NOT NULL AND tags != '[]' AND tags != '' AND tags != 'null'
+	AND expiry IS NOT NULL;
+						`).Error
+					if err != nil {
+						return fmt.Errorf("clearing expiry on tagged nodes: %w", err)
 					}
 
 					return nil
@@ -894,30 +944,7 @@ CREATE TABLE domain_access(
 
 		// Create domain tables using raw SQL to match schema.sql exactly.
 		// Must come after nodes table is created (FK dependency).
-		err = tx.Exec(`CREATE TABLE domains(
-  id integer PRIMARY KEY AUTOINCREMENT,
-  domain text NOT NULL,
-  node_id integer,
-  provider text,
-  api_token text,
-  verified numeric DEFAULT false,
-  verify_token text,
-  created_at datetime,
-  CONSTRAINT fk_domains_node FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
-)`).Error
-		if err != nil {
-			return err
-		}
-
-		err = tx.Exec(`CREATE TABLE domain_access(
-  id integer PRIMARY KEY AUTOINCREMENT,
-  domain_id integer NOT NULL,
-  user_id integer NOT NULL,
-  role text NOT NULL DEFAULT 'user',
-  created_at datetime,
-  CONSTRAINT fk_domain_access_domain FOREIGN KEY(domain_id) REFERENCES domains(id) ON DELETE CASCADE,
-  CONSTRAINT fk_domain_access_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-)`).Error
+		err = createDomainTables(tx)
 		if err != nil {
 			return err
 		}
@@ -1021,12 +1048,97 @@ CREATE TABLE domain_access(
 	}
 
 	db := HSDatabase{
-		DB:       dbConn,
-		cfg:      cfg,
-		regCache: regCache,
+		DB:  dbConn,
+		cfg: cfg,
 	}
 
 	return &db, err
+}
+
+// createDomainTables creates the domains and domain_access tables.
+//
+// The DDL is dialect-specific: the SQLite form is the source of truth in
+// schema.sql and is validated by squibble on startup, so it must not drift.
+// The PostgreSQL form mirrors the types GORM emits for the other tables
+// (bigserial/integer identity columns, boolean, timestamptz) so both backends
+// end up with an equivalent schema.
+//
+// Indexes are created separately because they are portable as written; see
+// createDomainIndexes and the shared index list in InitSchema.
+func createDomainTables(tx *gorm.DB) error {
+	var domains, domainAccess string
+
+	if tx.Name() == "postgres" {
+		domains = `CREATE TABLE domains(
+  id bigserial PRIMARY KEY,
+  domain text NOT NULL,
+  node_id bigint,
+  provider text,
+  api_token text,
+  verified boolean DEFAULT false,
+  verify_token text,
+  created_at timestamptz,
+  CONSTRAINT fk_domains_node FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
+)`
+		domainAccess = `CREATE TABLE domain_access(
+  id bigserial PRIMARY KEY,
+  domain_id bigint NOT NULL,
+  user_id integer NOT NULL,
+  role text NOT NULL DEFAULT 'user',
+  created_at timestamptz,
+  CONSTRAINT fk_domain_access_domain FOREIGN KEY(domain_id) REFERENCES domains(id) ON DELETE CASCADE,
+  CONSTRAINT fk_domain_access_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+)`
+	} else {
+		domains = `CREATE TABLE domains(
+  id integer PRIMARY KEY AUTOINCREMENT,
+  domain text NOT NULL,
+  node_id integer,
+  provider text,
+  api_token text,
+  verified numeric DEFAULT false,
+  verify_token text,
+  created_at datetime,
+  CONSTRAINT fk_domains_node FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
+)`
+		domainAccess = `CREATE TABLE domain_access(
+  id integer PRIMARY KEY AUTOINCREMENT,
+  domain_id integer NOT NULL,
+  user_id integer NOT NULL,
+  role text NOT NULL DEFAULT 'user',
+  created_at datetime,
+  CONSTRAINT fk_domain_access_domain FOREIGN KEY(domain_id) REFERENCES domains(id) ON DELETE CASCADE,
+  CONSTRAINT fk_domain_access_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+)`
+	}
+
+	err := tx.Exec(domains).Error
+	if err != nil {
+		return fmt.Errorf("creating domains table: %w", err)
+	}
+
+	err = tx.Exec(domainAccess).Error
+	if err != nil {
+		return fmt.Errorf("creating domain_access table: %w", err)
+	}
+
+	return nil
+}
+
+// createDomainIndexes creates the unique indexes for the domain tables. The
+// statements are portable across SQLite and PostgreSQL.
+func createDomainIndexes(tx *gorm.DB) error {
+	err := tx.Exec(`CREATE UNIQUE INDEX idx_domains_domain ON domains(domain)`).Error
+	if err != nil {
+		return fmt.Errorf("creating domains unique index: %w", err)
+	}
+
+	err = tx.Exec(`CREATE UNIQUE INDEX idx_domain_access_unique ON domain_access(domain_id, user_id)`).Error
+	if err != nil {
+		return fmt.Errorf("creating domain_access unique index: %w", err)
+	}
+
+	return nil
 }
 
 func openDB(cfg types.DatabaseConfig) (*gorm.DB, error) {

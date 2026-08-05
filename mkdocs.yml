@@ -1,7 +1,7 @@
 ---
 site_name: Headscale
 site_url: https://juanfont.github.io/headscale/
-edit_uri: blob/main/docs/ # Change the master branch to main as we are using main as a main branch
+edit_uri: blob/main/docs/
 site_author: Headscale authors
 site_description: >-
   An open source, self-hosted implementation of the Tailscale control server.
@@ -47,7 +47,6 @@ theme:
         name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: white
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
@@ -69,7 +68,9 @@ exclude_docs: |
 # Plugins
 plugins:
   - search:
-      separator: '[\s\-,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
+      provider: lunr
+      lunr:
+        separator: '[\s\-,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
   - macros:
   - include-markdown:
   - minify:
@@ -78,7 +79,8 @@ plugins:
   - social: {}
   - redirects:
       redirect_maps:
-        acls.md: ref/acls.md
+        acls.md: ref/policy.md
+        ref/acls.md: ref/policy.md
         android-client.md: usage/connect/android.md
         apple-client.md: usage/connect/apple.md
         dns-records.md: ref/dns.md
@@ -111,7 +113,7 @@ extra:
     - icon: fontawesome/brands/discord
       link: https://discord.gg/c84AZQhmpx
   headscale:
-    version: 0.28.0
+    version: 0.29.3
 
 # Extensions
 markdown_extensions:
@@ -138,6 +140,7 @@ markdown_extensions:
       pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.keys
+  - pymdownx.magiclink
   - pymdownx.mark
   - pymdownx.smartsymbols
   - pymdownx.superfences:
@@ -184,7 +187,7 @@ nav:
       - OpenID Connect: ref/oidc.md
       - Routes: ref/routes.md
       - TLS: ref/tls.md
-      - ACLs: ref/acls.md
+      - Policy: ref/policy.md
       - DNS: ref/dns.md
       - DERP: ref/derp.md
       - API: ref/api.md
