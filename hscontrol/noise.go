@@ -11,13 +11,15 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
-	"github.com/juanfont/headscale/hscontrol/dns/providers"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/metrics"
 	"github.com/juanfont/headscale/hscontrol/capver"
+	"github.com/juanfont/headscale/hscontrol/dns/providers"
+	"github.com/juanfont/headscale/hscontrol/mapper"
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -773,6 +775,35 @@ func (ns *noiseServer) SetDNSHandler(
 		return
 	}
 
+	// Authorize before touching the DNS provider. The Noise handshake
+	// accepts any machine key without checking registration, so reaching
+	// this handler proves nothing about the caller - without the two checks
+	// below, an unregistered peer could write arbitrary records into every
+	// zone whose credentials headscale holds.
+	nv, err := ns.nodeForKey(setDnsRequest.NodeKey)
+	if err != nil {
+		httpError(writer, err)
+		return
+	}
+
+	certDomains := mapper.GetCertDomainsForNodeView(
+		ns.headscale.cfg,
+		nv,
+		ns.headscale.state.VerifiedDomainsForNode,
+	)
+	if err := authorizeSetDNS(setDnsRequest.Name, setDnsRequest.Type, certDomains); err != nil {
+		log.Warn().
+			Err(err).
+			Uint64("node_id", uint64(nv.ID())).
+			Str("node", nv.Hostname()).
+			Str("name", setDnsRequest.Name).
+			Str("type", setDnsRequest.Type).
+			Msg("rejected unauthorized set-dns request")
+		httpError(writer, NewHTTPError(http.StatusForbidden, "not authorized to set this DNS record", err))
+
+		return
+	}
+
 	// Try DNS provider from database first, fall back to set_dns_command
 	var dnsErr error
 	zone, zoneErr := ns.headscale.state.FindParentZone(setDnsRequest.Name)
@@ -829,6 +860,59 @@ func (ns *noiseServer) SetDNSHandler(
 			Msg("Failed to write response")
 	}
 
+}
+
+// acmeChallengeLabel is the label ACME DNS-01 prepends to the name being
+// validated. A node asking to write "_acme-challenge.git.example.com" is
+// authorized against "git.example.com".
+const acmeChallengeLabel = "_acme-challenge."
+
+// setDNSRecordType is the only record type /machine/set-dns will write. The
+// endpoint exists to answer ACME DNS-01 challenges, which are always TXT.
+// Permitting any other type would let a caller repoint A, MX, or CNAME
+// records for names it is otherwise entitled to certificates for.
+const setDNSRecordType = "TXT"
+
+var (
+	errSetDNSUnsupportedType  = errors.New("only TXT records may be set via set-dns")
+	errSetDNSUnauthorizedName = errors.New("node is not authorized for this domain")
+)
+
+// authorizeSetDNS reports whether a node whose certificate allowlist is
+// certDomains may write the record (name, recordType).
+//
+// certDomains is the exact set of names headscale already told this node it
+// may obtain certificates for (its MagicDNS FQDN, matching extra_records, and
+// the verified domains bound to it). Reusing that set keeps DNS-write
+// authority and certificate authority from drifting apart: a name a node
+// cannot get a certificate for is a name it cannot write DNS for either.
+//
+// Both the bare domain and its _acme-challenge form are accepted. lego and
+// tailscaled write the prefixed name, but accepting the bare one costs
+// nothing - it is still confined to the node's own allowlist - and avoids
+// breaking a client that composes the challenge name differently.
+func authorizeSetDNS(name, recordType string, certDomains []string) error {
+	if !strings.EqualFold(recordType, setDNSRecordType) {
+		return fmt.Errorf("%w: %q", errSetDNSUnsupportedType, recordType)
+	}
+
+	target := normalizeDNSName(name)
+	target = strings.TrimPrefix(target, acmeChallengeLabel)
+
+	for _, domain := range certDomains {
+		if target == normalizeDNSName(domain) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("%w: %q", errSetDNSUnauthorizedName, name)
+}
+
+// normalizeDNSName lowercases a DNS name and drops the root label, so a
+// request for "_ACME-Challenge.Git.Example.com." matches a stored
+// "git.example.com".
+func normalizeDNSName(name string) string {
+	return strings.TrimSuffix(strings.ToLower(name), ".")
 }
 
 func regErr(err error) *tailcfg.RegisterResponse {
@@ -895,7 +979,14 @@ func (ns *noiseServer) RegistrationHandler(
 // getAndValidateNode retrieves the node from the database using the NodeKey
 // and validates that it matches the MachineKey from the Noise session.
 func (ns *noiseServer) getAndValidateNode(mapRequest tailcfg.MapRequest) (types.NodeView, error) {
-	nv, ok := ns.headscale.state.GetNodeByNodeKey(mapRequest.NodeKey)
+	return ns.nodeForKey(mapRequest.NodeKey)
+}
+
+// nodeForKey resolves the node a request claims to come from and proves the
+// claim against the Noise session, so a handler can attribute a request to a
+// registered node rather than to whoever completed the handshake.
+func (ns *noiseServer) nodeForKey(nodeKey key.NodePublic) (types.NodeView, error) {
+	nv, ok := ns.headscale.state.GetNodeByNodeKey(nodeKey)
 	if !ok {
 		return types.NodeView{}, NewHTTPError(http.StatusNotFound, "node not found", nil)
 	}
